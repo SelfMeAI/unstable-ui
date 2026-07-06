@@ -15,6 +15,7 @@
     "isolatedModules": true,
     "baseUrl": ".",
     "paths": {
+      "@selfme/unstable-ui": ["packages/unstable-ui/src"],
       "@selfme/unstable-ui-protocol": ["packages/protocol/src"],
       "@selfme/unstable-ui-harness-sdk": ["packages/harness-sdk/src"],
       "@selfme/unstable-ui-runtime": ["packages/runtime/src"],

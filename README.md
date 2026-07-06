@@ -6,6 +6,7 @@ The project ships as reusable npm packages. A demo Expo app lives in the repo as
 
 ## Packages
 
+- `@selfme/unstable-ui`: default install entry that re-exports the framework surface.
 - `@selfme/unstable-ui-protocol`: shared event, screen, artifact, and capability schemas.
 - `@selfme/unstable-ui-harness-sdk`: adapter interfaces for local, remote, and hybrid harnesses.
 - `@selfme/unstable-ui-runtime`: session lifecycle and runtime state management.
@@ -18,6 +19,7 @@ The project ships as reusable npm packages. A demo Expo app lives in the repo as
 apps/
   demo-expo/
 packages/
+  unstable-ui/
   protocol/
   harness-sdk/
   runtime/
@@ -28,14 +30,13 @@ packages/
 ## Install
 
 ```bash
-npm install @selfme/unstable-ui-protocol @selfme/unstable-ui-harness-sdk @selfme/unstable-ui-runtime @selfme/unstable-ui-renderer
+npm install @selfme/unstable-ui
 ```
 
 ## Minimal Usage
 
 ```tsx
-import { createLocalHarness } from "@selfme/unstable-ui-harness-sdk";
-import { AgentRuntimeView } from "@selfme/unstable-ui-renderer";
+import { AgentRuntimeView, createLocalHarness } from "@selfme/unstable-ui";
 
 const harness = createLocalHarness({
   bootstrap(emit) {
@@ -56,6 +57,8 @@ export function AssistantScreen() {
   return <AgentRuntimeView harness={harness} />;
 }
 ```
+
+Use the split packages only when you want tighter control over which layer you consume.
 
 ## Development
 
