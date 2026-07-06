@@ -64,6 +64,11 @@
               </thead>
               <tbody>
                 <tr>
+                  <td>Main Package</td>
+                  <td>作为默认安装入口，对外统一导出框架公开能力</td>
+                  <td><code class="inline">@selfme/unstable-ui</code></td>
+                </tr>
+                <tr>
                   <td>Protocol</td>
                   <td>定义事件、schema、artifact、capability 等跨端契约</td>
                   <td><code class="inline">@selfme/unstable-ui-protocol</code></td>
@@ -147,6 +152,7 @@
           <h2>7. 当前实现状态</h2>
           <ul>
             <li>仓库已经初始化为 npm workspace monorepo。</li>
+            <li>已经补齐主包 <code class="inline">@selfme/unstable-ui</code>，作为默认安装入口。</li>
             <li>GitHub Actions、Changesets、npm 发布骨架已经存在。</li>
             <li>协议包中已经有基础 schema、事件与 block 定义。</li>
             <li>runtime 中已经有最小状态机和 provider。</li>
