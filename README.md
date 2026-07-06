@@ -74,10 +74,12 @@ npm run start --workspace @unstable-ui/demo-expo
 
 ## Publishing
 
-Package publishing is wired around Changesets and GitHub Actions.
+Package publishing is maintainer-operated and wired around Changesets and GitHub Actions.
 
-1. Create a changeset: `npm run changeset`
-2. Version packages: `npm run version-packages`
-3. Publish from CI with `NPM_TOKEN` configured
+The current release flow is:
 
-The default package scope is `@unstable-ui`. Set the scope you own before the first publish.
+1. The maintainer records release changes with Changesets when a package version should move.
+2. Package versions are updated from the workspace before release.
+3. Publishing runs from CI with a repository-level `NPM_TOKEN`.
+
+Only maintainers with access to the npm scope and repository secrets can publish packages.
