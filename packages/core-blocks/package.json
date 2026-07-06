@@ -1,0 +1,39 @@
+{
+  "name": "@unstable-ui/core-blocks",
+  "version": "0.1.0",
+  "description": "Built-in block renderer set for the unstable-ui framework.",
+  "license": "MIT",
+  "sideEffects": false,
+  "main": "./dist/index.cjs",
+  "module": "./dist/index.mjs",
+  "types": "./dist/index.d.ts",
+  "react-native": "./src/index.tsx",
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.ts",
+      "react-native": "./src/index.tsx",
+      "import": "./dist/index.mjs",
+      "require": "./dist/index.cjs",
+      "default": "./dist/index.mjs"
+    }
+  },
+  "files": [
+    "dist",
+    "src"
+  ],
+  "scripts": {
+    "build": "tsup src/index.tsx --format esm,cjs --dts",
+    "typecheck": "tsc -p tsconfig.json --noEmit",
+    "prepack": "npm run build"
+  },
+  "publishConfig": {
+    "access": "public"
+  },
+  "peerDependencies": {
+    "react": "^19.0.0",
+    "react-native": ">=0.76.0"
+  },
+  "dependencies": {
+    "@unstable-ui/protocol": "0.1.0"
+  }
+}

@@ -1,0 +1,25 @@
+{
+  "compilerOptions": {
+    "target": "ES2022",
+    "module": "ESNext",
+    "moduleResolution": "Bundler",
+    "lib": ["ES2022"],
+    "strict": true,
+    "noEmit": true,
+    "skipLibCheck": true,
+    "jsx": "react-jsx",
+    "resolveJsonModule": true,
+    "allowSyntheticDefaultImports": true,
+    "esModuleInterop": true,
+    "forceConsistentCasingInFileNames": true,
+    "isolatedModules": true,
+    "baseUrl": ".",
+    "paths": {
+      "@unstable-ui/protocol": ["packages/protocol/src"],
+      "@unstable-ui/harness-sdk": ["packages/harness-sdk/src"],
+      "@unstable-ui/runtime": ["packages/runtime/src"],
+      "@unstable-ui/core-blocks": ["packages/core-blocks/src"],
+      "@unstable-ui/renderer": ["packages/renderer/src"]
+    }
+  }
+}

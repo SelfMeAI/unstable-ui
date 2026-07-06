@@ -1,0 +1,163 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>unstable-ui 当前架构</title>
+    <link rel="stylesheet" href="../style.css" />
+  </head>
+  <body>
+    <main class="page">
+      <section class="hero">
+        <div class="meta">
+          <span class="pill">内部架构</span>
+          <span class="pill alt">中文 HTML</span>
+        </div>
+        <h1>unstable-ui 当前架构</h1>
+        <p>
+          这份文档记录当前已经确定的项目边界、核心抽象和非目标。后续实现可以演进，但默认都应在这里的框架内推进，而不是重新回到产品形态和技术路线发散。
+        </p>
+      </section>
+
+      <section class="content">
+        <section class="section">
+          <h2>1. 项目定位</h2>
+          <p>
+            <strong>unstable-ui</strong> 是一个给 <code class="inline">agent / harness</code> 使用的
+            <strong>React Native UI 框架</strong>。它不是 assistant 成品，不是 LLM 编排平台，也不是语音识别服务。它负责的是一层可嵌入的 UI 运行框架，让外部智能体把结构化界面渲染到移动端。
+          </p>
+          <div class="note">
+            核心句子：任何远端或本地的 harness，只要输出符合协议的事件和 UI schema，这个框架就能在 React Native 中稳定地渲染和交互。
+          </div>
+        </section>
+
+        <section class="section">
+          <h2>2. 核心原则</h2>
+          <h3>2.1 固定底盘，动态工作区</h3>
+          <p>
+            长期稳定的是框架底盘，例如语音入口、状态展示、错误与确认机制；任务工作区则由 harness 按协议描述并驱动。
+          </p>
+          <h3>2.2 动态 UI 不是任意 UI</h3>
+          <p>
+            不允许服务端或模型直接下发 JSX、原生代码或任意脚本。所有动态界面必须通过受约束的 block schema 表达。
+          </p>
+          <h3>2.3 位置无关</h3>
+          <p>
+            agent 可以运行在云端、本地或混合环境。框架只依赖统一的 harness 接口和事件协议，不依赖 agent 的部署位置。
+          </p>
+          <h3>2.4 对外可嵌入，对内可扩展</h3>
+          <p>
+            对外以 npm 包形态发布，可以嵌入别人的 RN 页面；官方 demo 只是参考壳，不代表框架必须接管整个 app。
+          </p>
+        </section>
+
+        <section class="section">
+          <h2>3. 分层设计</h2>
+          <div class="table-wrap">
+            <table>
+              <thead>
+                <tr>
+                  <th>层</th>
+                  <th>职责</th>
+                  <th>当前对应包</th>
+                </tr>
+              </thead>
+              <tbody>
+                <tr>
+                  <td>Protocol</td>
+                  <td>定义事件、schema、artifact、capability 等跨端契约</td>
+                  <td><code class="inline">@unstable-ui/protocol</code></td>
+                </tr>
+                <tr>
+                  <td>Harness SDK</td>
+                  <td>统一本地、远端、混合 harness 的接入接口</td>
+                  <td><code class="inline">@unstable-ui/harness-sdk</code></td>
+                </tr>
+                <tr>
+                  <td>Runtime</td>
+                  <td>管理会话、屏幕状态、artifact 状态和生命周期</td>
+                  <td><code class="inline">@unstable-ui/runtime</code></td>
+                </tr>
+                <tr>
+                  <td>Core Blocks</td>
+                  <td>提供官方内建 block 的基础渲染实现</td>
+                  <td><code class="inline">@unstable-ui/core-blocks</code></td>
+                </tr>
+                <tr>
+                  <td>Renderer</td>
+                  <td>把 schema 变成 React Native 组件树</td>
+                  <td><code class="inline">@unstable-ui/renderer</code></td>
+                </tr>
+                <tr>
+                  <td>Demo App</td>
+                  <td>展示完整接入路径，验证最小闭环</td>
+                  <td><code class="inline">apps/demo-expo</code></td>
+                </tr>
+              </tbody>
+            </table>
+          </div>
+          <pre><code>External Agent / Workflow / Local Logic
+          ↓
+    HarnessAdapter (local / remote / hybrid)
+          ↓
+         Runtime
+          ↓
+        Renderer
+          ↓
+  React Native Screen / Component Tree</code></pre>
+        </section>
+
+        <section class="section">
+          <h2>4. Harness 模型</h2>
+          <ul>
+            <li><strong>Remote Harness</strong>：运行在服务端，通过 HTTP / SSE / WebSocket 等方式提供事件流。</li>
+            <li><strong>Local Harness</strong>：运行在端内，直接通过 TS 接口回调事件。</li>
+            <li><strong>Hybrid Harness</strong>：本地和云端混合，各自承担不同阶段能力。</li>
+          </ul>
+          <p>
+            不管哪种形态，UI 框架只认 <code class="inline">HarnessAdapter</code>。外部智能体用什么技术栈，不是当前仓库关心的对象。
+          </p>
+        </section>
+
+        <section class="section">
+          <h2>5. Artifact 与 Capability</h2>
+          <h3>5.1 Artifact</h3>
+          <p>
+            agent 经常会产出链接、图片、音频、文件、HTML、PDF 等内容。框架不按来源区分，而是统一抽象成 artifact；来源可以是本地，也可以是远端。
+          </p>
+          <h3>5.2 Capability</h3>
+          <p>
+            设备能力如麦克风、相册、定位、文件选择、分享、外部打开，需要通过 capability request 走受控桥接，而不是让 agent 直接调原生 API。
+          </p>
+        </section>
+
+        <section class="section">
+          <h2>6. 非目标</h2>
+          <ul>
+            <li>不做 LLM orchestration 平台。</li>
+            <li>不做完整 agent framework。</li>
+            <li>不做语音识别或模型服务本身。</li>
+            <li>不让模型直接生成任意原生代码。</li>
+            <li>不把 demo app 当成项目本体。</li>
+            <li>不在仓库文档中继续写技术选型对比。</li>
+          </ul>
+        </section>
+
+        <section class="section">
+          <h2>7. 当前实现状态</h2>
+          <ul>
+            <li>仓库已经初始化为 npm workspace monorepo。</li>
+            <li>GitHub Actions、Changesets、npm 发布骨架已经存在。</li>
+            <li>协议包中已经有基础 schema、事件与 block 定义。</li>
+            <li>runtime 中已经有最小状态机和 provider。</li>
+            <li>renderer 已能渲染 text / card / list / actions / resource。</li>
+            <li>demo app 已用本地 harness 跑通最小闭环。</li>
+            <li>语音入口壳、最小 artifact preview/open bridge、最小 capability request 流已实现。</li>
+            <li>零依赖的 remote harness 示例服务已实现。</li>
+            <li>更完整的 artifact 渲染、真实设备桥接和更成熟的远端接入辅助仍未实现。</li>
+          </ul>
+        </section>
+      </section>
+    </main>
+  </body>
+</html>

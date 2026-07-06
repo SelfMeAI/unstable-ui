@@ -1,0 +1,89 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>unstable-ui 开发路线</title>
+    <link rel="stylesheet" href="../style.css" />
+  </head>
+  <body>
+    <main class="page">
+      <section class="hero">
+        <div class="meta">
+          <span class="pill">内部开发路线</span>
+          <span class="pill alt">中文 HTML</span>
+        </div>
+        <h1>unstable-ui 开发路线</h1>
+        <p>
+          这份路线不是对外 roadmap，而是当前仓库实际建议的推进顺序。目的是减少来回跳题，优先把协议、基础壳和桥接能力跑通。
+        </p>
+      </section>
+
+      <section class="content">
+        <section class="section">
+          <h2>1. 已完成</h2>
+          <ul>
+            <li>初始化 monorepo。</li>
+            <li>拆出 protocol、harness-sdk、runtime、core-blocks、renderer、demo-expo。</li>
+            <li>补齐 GitHub Actions、Changesets、npm 发布骨架。</li>
+            <li>实现最小协议和最小本地 harness 闭环。</li>
+            <li>建立内部中文 HTML 文档目录。</li>
+            <li>实现固定 voice shell v0 与最小 artifact preview/open bridge。</li>
+            <li>增加零依赖的远端 harness 示例服务。</li>
+            <li>实现最小 capability request / capability.resolved 闭环。</li>
+          </ul>
+        </section>
+
+        <section class="section">
+          <h2>2. 阶段一：把框架主干跑通</h2>
+          <ol>
+            <li>做最小 <strong>voice shell</strong>：固定入口、状态栏、按住说话交互占位。</li>
+            <li>增强 <strong>artifact bridge</strong>：从当前最小 preview/open 扩展到更真实的资源预览行为。</li>
+            <li>增强 <strong>capability bridge</strong>：从当前最小 mock 流扩展到真实设备权限和系统能力桥接。</li>
+            <li>把 renderer 的状态显示、空态、错误态再做完整一点。</li>
+          </ol>
+        </section>
+
+        <section class="section">
+          <h2>3. 阶段二：把接入面补齐</h2>
+          <ol>
+            <li>实现 <strong>remote harness</strong> 官方示例。</li>
+            <li>定义推荐的 HTTP / SSE 接入形态。</li>
+            <li>补本地 mock / playground，便于协议调试。</li>
+            <li>把 block 扩到下一组常用集合，例如 form、sheet、timeline。</li>
+          </ol>
+        </section>
+
+        <section class="section">
+          <h2>4. 阶段三：增强稳定性与可扩展性</h2>
+          <ol>
+            <li>支持 streaming patch，而不只是整屏更新。</li>
+            <li>加入会话恢复、本地缓存和 event log。</li>
+            <li>把 artifact preview 做成可扩展注册机制。</li>
+            <li>整理更正式的对外接入文档和示例仓库。</li>
+          </ol>
+        </section>
+
+        <section class="section">
+          <h2>5. 阶段验收标准</h2>
+          <h3>5.1 阶段一</h3>
+          <ul>
+            <li>demo 中能看到固定壳 + 动态工作区。</li>
+            <li>能触发 action 并收到协议回流。</li>
+            <li>至少一种 artifact 能 preview/open 跑通。</li>
+          </ul>
+          <h3>5.2 阶段二</h3>
+          <ul>
+            <li>远端 harness 能通过官方示例接入。</li>
+            <li>外部开发者能看着示例接出自己的最小后端。</li>
+          </ul>
+          <h3>5.3 阶段三</h3>
+          <ul>
+            <li>协议和运行时具备基本扩展能力，不再只是 demo 级别。</li>
+            <li>框架有能力承载更复杂的任务流，而不需要推翻分层。</li>
+          </ul>
+        </section>
+      </section>
+    </main>
+  </body>
+</html>

@@ -1,0 +1,19 @@
+{
+  "name": "@unstable-ui/demo-expo",
+  "version": "0.1.0",
+  "private": true,
+  "main": "expo/AppEntry",
+  "scripts": {
+    "start": "expo start",
+    "android": "expo run:android",
+    "ios": "expo run:ios",
+    "web": "expo start --web"
+  },
+  "dependencies": {
+    "@unstable-ui/harness-sdk": "0.1.0",
+    "@unstable-ui/renderer": "0.1.0",
+    "expo": "~57.0.0",
+    "react": "19.1.0",
+    "react-native": "0.81.0"
+  }
+}

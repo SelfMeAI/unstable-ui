@@ -1,0 +1,197 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>unstable-ui 协议草案 v0.1</title>
+    <link rel="stylesheet" href="../style.css" />
+  </head>
+  <body>
+    <main class="page">
+      <section class="hero">
+        <div class="meta">
+          <span class="pill">内部协议草案</span>
+          <span class="pill alt">中文 HTML</span>
+        </div>
+        <h1>unstable-ui 协议草案 v0.1</h1>
+        <p>
+          这一版协议以“先跑通最小闭环”为目标，覆盖当前仓库已经实现或已经明确准备支持的事件和数据结构。后续允许扩展，但不应随意破坏已有语义。
+        </p>
+      </section>
+
+      <section class="content">
+        <section class="section">
+          <h2>1. 协议总形态</h2>
+          <p>
+            协议是<strong>事件驱动</strong>的，不是一次性返回整页 HTML 或组件代码。harness 对客户端的主要输出是事件流，客户端对 harness 的主要输入也是事件。
+          </p>
+          <ul>
+            <li>harness 负责表达“此刻展示什么、等待什么、正在处理什么”。</li>
+            <li>客户端负责状态管理、渲染和把用户操作回传成结构化事件。</li>
+            <li>双方通过 JSON 交互，不传可执行 UI 代码。</li>
+          </ul>
+        </section>
+
+        <section class="section">
+          <h2>2. Harness 事件</h2>
+          <div class="table-wrap">
+            <table>
+              <thead>
+                <tr>
+                  <th>事件</th>
+                  <th>作用</th>
+                  <th>当前状态</th>
+                </tr>
+              </thead>
+              <tbody>
+                <tr>
+                  <td><code class="inline">session.started</code></td>
+                  <td>声明 session 已创建，并返回 sessionId</td>
+                  <td>已实现</td>
+                </tr>
+                <tr>
+                  <td><code class="inline">status</code></td>
+                  <td>更新运行阶段，例如 waiting、thinking、running</td>
+                  <td>已实现</td>
+                </tr>
+                <tr>
+                  <td><code class="inline">screen.updated</code></td>
+                  <td>下发新的 screen schema</td>
+                  <td>已实现</td>
+                </tr>
+                <tr>
+                  <td><code class="inline">artifact.available</code></td>
+                  <td>声明某个 artifact 可被预览或打开</td>
+                  <td>已实现基础状态</td>
+                </tr>
+                <tr>
+                  <td><code class="inline">capability.requested</code></td>
+                  <td>向客户端请求设备能力</td>
+                  <td>协议已定义，桥接未做</td>
+                </tr>
+                <tr>
+                  <td><code class="inline">error</code></td>
+                  <td>展示可读错误信息</td>
+                  <td>已实现</td>
+                </tr>
+                <tr>
+                  <td><code class="inline">session.completed</code></td>
+                  <td>声明当前任务已结束</td>
+                  <td>已实现基础状态</td>
+                </tr>
+              </tbody>
+            </table>
+          </div>
+          <pre><code>{
+  "type": "status",
+  "phase": "thinking"
+}</code></pre>
+        </section>
+
+        <section class="section">
+          <h2>3. 客户端事件</h2>
+          <div class="table-wrap">
+            <table>
+              <thead>
+                <tr>
+                  <th>事件</th>
+                  <th>作用</th>
+                  <th>当前状态</th>
+                </tr>
+              </thead>
+              <tbody>
+                <tr>
+                  <td><code class="inline">session.start</code></td>
+                  <td>发起新会话</td>
+                  <td>协议已定义</td>
+                </tr>
+                <tr>
+                  <td><code class="inline">voice.input</code></td>
+                  <td>提交转写文本和可选音频地址</td>
+                  <td>协议已定义，语音壳未做</td>
+                </tr>
+                <tr>
+                  <td><code class="inline">action.triggered</code></td>
+                  <td>回传用户点击或操作的 action</td>
+                  <td>已实现</td>
+                </tr>
+                <tr>
+                  <td><code class="inline">artifact.requested</code></td>
+                  <td>请求 preview / open / share / download</td>
+                  <td>已实现基础状态</td>
+                </tr>
+                <tr>
+                  <td><code class="inline">capability.resolved</code></td>
+                  <td>返回设备能力请求结果</td>
+                  <td>协议已定义</td>
+                </tr>
+              </tbody>
+            </table>
+          </div>
+        </section>
+
+        <section class="section">
+          <h2>4. Block 集合</h2>
+          <p>当前内建 block 只保留最小集合，不追求一开始就完整。</p>
+          <ul>
+            <li><code class="inline">text</code>：纯文本块。</li>
+            <li><code class="inline">card</code>：标题 + 正文概览块。</li>
+            <li><code class="inline">list</code>：列表条目集合。</li>
+            <li><code class="inline">actions</code>：一组操作按钮。</li>
+            <li><code class="inline">resource</code>：单个 artifact 资源块。</li>
+          </ul>
+          <pre><code>{
+  "id": "actions-1",
+  "type": "actions",
+  "items": [
+    { "id": "show-plan", "label": "Show plan" },
+    { "id": "preview-asset", "label": "Preview asset" }
+  ]
+}</code></pre>
+        </section>
+
+        <section class="section">
+          <h2>5. Artifact</h2>
+          <p>
+            Artifact 用来统一表达本地或远端产物。当前类型包括
+            <code class="inline">text / image / audio / video / pdf / html / file / link / json</code>。
+          </p>
+          <pre><code>{
+  "id": "artifact-1",
+  "kind": "link",
+  "uri": "https://github.com",
+  "source": "remote",
+  "title": "GitHub",
+  "previewable": true,
+  "openable": true
+}</code></pre>
+        </section>
+
+        <section class="section">
+          <h2>6. Capability</h2>
+          <p>
+            Capability request 用来请求设备能力。目前协议里已预留
+            <code class="inline">microphone / camera / photo-library / location / file-picker / share / open-url</code>。
+          </p>
+          <pre><code>{
+  "type": "capability.requested",
+  "request": {
+    "id": "req_1",
+    "capability": "microphone",
+    "reason": "需要录入语音输入"
+  }
+}</code></pre>
+        </section>
+
+        <section class="section">
+          <h2>7. 当前判断</h2>
+          <ul>
+            <li>第一版协议坚持“事件 + 受约束 block schema”，不回退到任意组件代码。</li>
+            <li>artifact 与 capability 现在先在协议层定清楚，桥接能力后补。</li>
+            <li>如果后续出现更复杂布局需求，优先扩展 block 和 layout schema，而不是引入可执行 UI。</li>
+          </ul>
+        </section>
+      </section>
+    </main>
+  </body>
+</html>
