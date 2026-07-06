@@ -1,6 +1,6 @@
-import { AgentRuntimeView } from "@unstable-ui/renderer";
-import { createLocalHarness } from "@unstable-ui/harness-sdk";
-import type { ScreenSchema } from "@unstable-ui/protocol";
+import { AgentRuntimeView } from "@selfme/unstable-ui-renderer";
+import { createLocalHarness } from "@selfme/unstable-ui-harness-sdk";
+import type { ScreenSchema } from "@selfme/unstable-ui-protocol";
 
 const homeScreen: ScreenSchema = {
   id: "home",

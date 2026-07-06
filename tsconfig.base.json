@@ -15,11 +15,11 @@
     "isolatedModules": true,
     "baseUrl": ".",
     "paths": {
-      "@unstable-ui/protocol": ["packages/protocol/src"],
-      "@unstable-ui/harness-sdk": ["packages/harness-sdk/src"],
-      "@unstable-ui/runtime": ["packages/runtime/src"],
-      "@unstable-ui/core-blocks": ["packages/core-blocks/src"],
-      "@unstable-ui/renderer": ["packages/renderer/src"]
+      "@selfme/unstable-ui-protocol": ["packages/protocol/src"],
+      "@selfme/unstable-ui-harness-sdk": ["packages/harness-sdk/src"],
+      "@selfme/unstable-ui-runtime": ["packages/runtime/src"],
+      "@selfme/unstable-ui-core-blocks": ["packages/core-blocks/src"],
+      "@selfme/unstable-ui-renderer": ["packages/renderer/src"]
     }
   }
 }

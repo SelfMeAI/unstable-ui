@@ -1,6 +1,6 @@
 {
-  "name": "@unstable-ui/harness-sdk",
-  "version": "0.1.0",
+  "name": "@selfme/unstable-ui-harness-sdk",
+  "version": "0.1.0-alpha.0",
   "description": "Harness adapter SDK for the unstable-ui framework.",
   "license": "MIT",
   "sideEffects": false,
@@ -27,6 +27,6 @@
     "access": "public"
   },
   "dependencies": {
-    "@unstable-ui/protocol": "0.1.0"
+    "@selfme/unstable-ui-protocol": "0.1.0-alpha.0"
   }
 }

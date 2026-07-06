@@ -6,11 +6,11 @@ The project ships as reusable npm packages. A demo Expo app lives in the repo as
 
 ## Packages
 
-- `@unstable-ui/protocol`: shared event, screen, artifact, and capability schemas.
-- `@unstable-ui/harness-sdk`: adapter interfaces for local, remote, and hybrid harnesses.
-- `@unstable-ui/runtime`: session lifecycle and runtime state management.
-- `@unstable-ui/core-blocks`: default block implementations for the built-in schema.
-- `@unstable-ui/renderer`: the default React Native renderer and runtime view.
+- `@selfme/unstable-ui-protocol`: shared event, screen, artifact, and capability schemas.
+- `@selfme/unstable-ui-harness-sdk`: adapter interfaces for local, remote, and hybrid harnesses.
+- `@selfme/unstable-ui-runtime`: session lifecycle and runtime state management.
+- `@selfme/unstable-ui-core-blocks`: default block implementations for the built-in schema.
+- `@selfme/unstable-ui-renderer`: the default React Native renderer and runtime view.
 
 ## Repo Layout
 
@@ -28,14 +28,14 @@ packages/
 ## Install
 
 ```bash
-npm install @unstable-ui/protocol @unstable-ui/harness-sdk @unstable-ui/runtime @unstable-ui/renderer
+npm install @selfme/unstable-ui-protocol @selfme/unstable-ui-harness-sdk @selfme/unstable-ui-runtime @selfme/unstable-ui-renderer
 ```
 
 ## Minimal Usage
 
 ```tsx
-import { createLocalHarness } from "@unstable-ui/harness-sdk";
-import { AgentRuntimeView } from "@unstable-ui/renderer";
+import { createLocalHarness } from "@selfme/unstable-ui-harness-sdk";
+import { AgentRuntimeView } from "@selfme/unstable-ui-renderer";
 
 const harness = createLocalHarness({
   bootstrap(emit) {
@@ -69,7 +69,7 @@ Run the Expo demo:
 
 ```bash
 npm install
-npm run start --workspace @unstable-ui/demo-expo
+npm run start --workspace @selfme/unstable-ui-demo-expo
 ```
 
 ## Publishing

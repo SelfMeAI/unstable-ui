@@ -1,8 +1,14 @@
 import { createContext, useContext, useEffect, type ReactNode } from "react";
 import { useMachine } from "@xstate/react";
 import { assign, setup } from "xstate";
-import type { HarnessAdapter } from "@unstable-ui/harness-sdk";
-import type { ArtifactRef, CapabilityRequest, ClientEvent, HarnessEvent, ScreenSchema } from "@unstable-ui/protocol";
+import type { HarnessAdapter } from "@selfme/unstable-ui-harness-sdk";
+import type {
+  ArtifactRef,
+  CapabilityRequest,
+  ClientEvent,
+  HarnessEvent,
+  ScreenSchema
+} from "@selfme/unstable-ui-protocol";
 
 export interface RuntimeContextValue {
   phase: "idle" | "connecting" | "active" | "completed" | "error";

@@ -1,9 +1,9 @@
 import { useState } from "react";
 import { Linking, Modal, Pressable, ScrollView, StyleSheet, Text, View } from "react-native";
-import { CoreBlock } from "@unstable-ui/core-blocks";
-import type { HarnessAdapter } from "@unstable-ui/harness-sdk";
-import type { ArtifactRef, CapabilityRequest } from "@unstable-ui/protocol";
-import { AgentRuntimeProvider, useAgentRuntime } from "@unstable-ui/runtime";
+import { CoreBlock } from "@selfme/unstable-ui-core-blocks";
+import type { HarnessAdapter } from "@selfme/unstable-ui-harness-sdk";
+import type { ArtifactRef, CapabilityRequest } from "@selfme/unstable-ui-protocol";
+import { AgentRuntimeProvider, useAgentRuntime } from "@selfme/unstable-ui-runtime";
 
 const defaultMockTranscripts = [
   "Plan my day around two deep work blocks and one gym session.",

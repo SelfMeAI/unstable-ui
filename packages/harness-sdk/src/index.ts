@@ -1,4 +1,4 @@
-import type { ClientEvent, HarnessEvent } from "@unstable-ui/protocol";
+import type { ClientEvent, HarnessEvent } from "@selfme/unstable-ui-protocol";
 
 export type HarnessListener = (event: HarnessEvent) => void;
 export type Unsubscribe = () => void;

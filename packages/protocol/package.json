@@ -1,6 +1,6 @@
 {
-  "name": "@unstable-ui/protocol",
-  "version": "0.1.0",
+  "name": "@selfme/unstable-ui-protocol",
+  "version": "0.1.0-alpha.0",
   "description": "Protocol schemas for the unstable-ui framework.",
   "license": "MIT",
   "sideEffects": false,

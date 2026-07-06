@@ -48,27 +48,27 @@
 
         <section class="section">
           <h2>2. package 职责</h2>
-          <h3>2.1 @unstable-ui/protocol</h3>
+          <h3>2.1 @selfme/unstable-ui-protocol</h3>
           <ul>
             <li>只放 schema、类型、解析器和协议常量。</li>
             <li>不放 React、RN 视图或平台相关实现。</li>
           </ul>
-          <h3>2.2 @unstable-ui/harness-sdk</h3>
+          <h3>2.2 @selfme/unstable-ui-harness-sdk</h3>
           <ul>
             <li>只放 harness adapter 抽象与官方 adapter 工具。</li>
             <li>远端、本地、混合接入优先从这里扩展。</li>
           </ul>
-          <h3>2.3 @unstable-ui/runtime</h3>
+          <h3>2.3 @selfme/unstable-ui-runtime</h3>
           <ul>
             <li>负责会话状态机、provider、hooks、生命周期。</li>
             <li>不直接负责视觉表现。</li>
           </ul>
-          <h3>2.4 @unstable-ui/core-blocks</h3>
+          <h3>2.4 @selfme/unstable-ui-core-blocks</h3>
           <ul>
             <li>放官方默认 block 的实现。</li>
             <li>后面 block 增长后，这里仍然只保留“基础官方集”。</li>
           </ul>
-          <h3>2.5 @unstable-ui/renderer</h3>
+          <h3>2.5 @selfme/unstable-ui-renderer</h3>
           <ul>
             <li>把 runtime 和 core blocks 组织成默认 RN 视图。</li>
             <li>对外提供 <code class="inline">AgentRuntimeView</code> 这类可嵌入组件。</li>

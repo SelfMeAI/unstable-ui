@@ -1,5 +1,5 @@
 import { Pressable, StyleSheet, Text, View } from "react-native";
-import type { ActionItem, ArtifactRef, Block } from "@unstable-ui/protocol";
+import type { ActionItem, ArtifactRef, Block } from "@selfme/unstable-ui-protocol";
 
 export interface CoreBlockProps {
   block: Block;

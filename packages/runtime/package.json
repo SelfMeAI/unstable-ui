@@ -1,6 +1,6 @@
 {
-  "name": "@unstable-ui/runtime",
-  "version": "0.1.0",
+  "name": "@selfme/unstable-ui-runtime",
+  "version": "0.1.0-alpha.0",
   "description": "Session and runtime state for the unstable-ui framework.",
   "license": "MIT",
   "sideEffects": false,
@@ -34,8 +34,8 @@
     "react-native": ">=0.76.0"
   },
   "dependencies": {
-    "@unstable-ui/harness-sdk": "0.1.0",
-    "@unstable-ui/protocol": "0.1.0",
+    "@selfme/unstable-ui-harness-sdk": "0.1.0-alpha.0",
+    "@selfme/unstable-ui-protocol": "0.1.0-alpha.0",
     "@xstate/react": "^5.0.5",
     "xstate": "^5.18.2"
   }
