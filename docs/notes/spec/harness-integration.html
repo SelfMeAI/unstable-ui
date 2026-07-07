@@ -1,0 +1,88 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>unstable-ui Harness 接入说明</title>
+    <link rel="stylesheet" href="../style.css" />
+  </head>
+  <body>
+    <main class="page">
+      <section class="hero">
+        <div class="meta">
+          <span class="pill">内部接入说明</span>
+          <span class="pill alt">中文 HTML</span>
+        </div>
+        <h1>unstable-ui Harness 接入说明</h1>
+        <p>
+          这份文档说明 React Native 主实现线当前支持的 harness 接入路径，以及建议的起步顺序。目标是让接入者先把最小闭环跑通，再逐步切到更真实的远端或混合接入形态。
+        </p>
+      </section>
+
+      <section class="content">
+        <section class="section">
+          <h2>1. 概览</h2>
+          <p>
+            <strong>unstable-ui</strong> 接受本地、远端和混合 harness，通过统一 adapter 模型接入。框架负责 React Native 侧的运行时、schema 渲染、artifact 处理和 capability 桥接；harness 负责输出事件与 screen schema。
+          </p>
+          <div class="note">
+            核心原则：先统一协议面和接入接口，再区分 agent 实际运行在端内、云端还是混合环境。
+          </div>
+        </section>
+
+        <section class="section">
+          <h2>2. 当前接入模式</h2>
+          <h3>2.1 <code class="inline">createLocalHarness</code></h3>
+          <ul>
+            <li>适合端内 mock 流程、本地任务编排和快速 UI 迭代。</li>
+            <li>优点是闭环快、调试简单、无需先搭后端。</li>
+            <li>适合作为协议、block 和运行时状态的第一调试入口。</li>
+          </ul>
+
+          <h3>2.2 <code class="inline">createRemoteHarness</code></h3>
+          <ul>
+            <li>适合 agent 或 workflow 运行在客户端之外的场景。</li>
+            <li>当前推荐通过 HTTP + SSE 这类事件流方式把运行状态和 screen schema 推回端上。</li>
+            <li>当事件流、screen schema 和 action 回流稳定后，再切到远端最合适。</li>
+          </ul>
+
+          <h3>2.3 Hybrid Harness</h3>
+          <ul>
+            <li>适合一部分能力留在本地，一部分能力放在云端的场景。</li>
+            <li>对框架来说，关键不是部署位置，而是是否继续遵守统一协议面。</li>
+          </ul>
+        </section>
+
+        <section class="section">
+          <h2>3. 推荐起步路径</h2>
+          <ol>
+            <li>先用 <code class="inline">@selfme/unstable-ui</code> 作为默认安装入口。</li>
+            <li>先对接本地 harness，把最小屏幕渲染、action 回流和资源块跑通。</li>
+            <li>在 demo 里确认 block schema、artifact 行为和 capability 流没有歧义。</li>
+            <li>再切到远端 harness，接入真实服务端事件流。</li>
+          </ol>
+          <div class="note">
+            先本地、后远端，不是能力限制，而是为了减少早期同时调协议、UI 和服务端的噪音。
+          </div>
+        </section>
+
+        <section class="section">
+          <h2>4. Demo 参考</h2>
+          <ul>
+            <li><code class="inline">apps/demo-expo</code>：演示本地 harness 路径和默认 runtime shell。</li>
+            <li><code class="inline">apps/demo-harness</code>：演示最小远端 HTTP + SSE harness 服务。</li>
+          </ul>
+        </section>
+
+        <section class="section">
+          <h2>5. 当前判断</h2>
+          <ul>
+            <li>React Native 主实现线现在已经具备最小但真实的接入闭环。</li>
+            <li>当前重点是让本地 / 远端 / 混合三类接入都能落在统一 adapter 模型上。</li>
+            <li>它现在更适合 starter integration，而不是完整生产接入套件。</li>
+          </ul>
+        </section>
+      </section>
+    </main>
+  </body>
+</html>
