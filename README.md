@@ -60,6 +60,378 @@ export function AssistantScreen() {
 
 Use the split packages only when you want tighter control over which layer you consume.
 
+## Remote Harness Starter
+
+The harness SDK now includes a first-party HTTP + SSE adapter for the repo's recommended remote shape:
+
+```tsx
+import { AgentRuntimeView, createRemoteHttpSseHarness } from "@selfme/unstable-ui";
+
+const harness = createRemoteHttpSseHarness({
+  baseUrl: "http://127.0.0.1:8787"
+});
+
+export function RemoteAssistantScreen() {
+  return <AgentRuntimeView harness={harness} />;
+}
+```
+
+The Expo demo can switch to the remote harness automatically:
+
+```bash
+PORT=8787 npm run start --workspace @selfme/unstable-ui-demo-harness
+EXPO_PUBLIC_UNSTABLE_UI_HARNESS_BASE_URL=http://127.0.0.1:8787 npm run start --workspace @selfme/unstable-ui-demo-expo
+```
+
+If you want the remote adapter to reconnect to the same server-side session, add a session store:
+
+```tsx
+import { createRemoteHttpSseHarness, type RemoteSessionStore } from "@selfme/unstable-ui";
+
+const sessionStore: RemoteSessionStore = {
+  load: async () => undefined,
+  save: async (session) => {
+    console.log(session.sessionId);
+  }
+};
+
+const harness = createRemoteHttpSseHarness({
+  baseUrl: "http://127.0.0.1:8787",
+  sessionStore
+});
+```
+
+## Artifact Handlers
+
+The default renderer also accepts artifact handlers so a host app can customize preview and open behavior by artifact kind:
+
+```tsx
+import { AgentRuntimeView, type ArtifactHandlers } from "@selfme/unstable-ui";
+
+const artifactHandlers: ArtifactHandlers = {
+  html: {
+    preview: (artifact) => ({
+      title: artifact.title,
+      description: "Custom host preview for HTML artifacts.",
+      fields: [{ label: "Surface", value: artifact.uri }],
+      openLabel: "Open report"
+    })
+  }
+};
+
+export function AssistantScreen() {
+  return <AgentRuntimeView harness={harness} artifactHandlers={artifactHandlers} />;
+}
+```
+
+Capability handlers work the same way for device-bridge requests:
+
+```tsx
+import { AgentRuntimeView, type CapabilityHandlers } from "@selfme/unstable-ui";
+
+const capabilityHandlers: CapabilityHandlers = {
+  microphone: {
+    describe: () => ({
+      title: "Microphone bridge",
+      primaryLabel: "Grant access",
+      secondaryLabel: "Not now"
+    }),
+    resolve: async (_request, granted) => ({
+      payload: {
+        bridge: "host-app",
+        granted
+      }
+    })
+  }
+};
+
+export function AssistantScreen() {
+  return <AgentRuntimeView harness={harness} capabilityHandlers={capabilityHandlers} />;
+}
+```
+
+## Custom Input Shell
+
+The default input shell can also be replaced by the host app. The renderer still owns the workspace surface and the session history entry; the host app only swaps the bottom input control:
+
+```tsx
+import { AgentRuntimeView, type VoiceShellRenderProps } from "@selfme/unstable-ui";
+import { Pressable, Text, TextInput, View } from "react-native";
+
+function CustomVoiceShell(props: VoiceShellRenderProps) {
+  return (
+    <View>
+      <Text>{props.statusLabel}</Text>
+      <Text>{props.promptLabel}</Text>
+      {props.inputMode === "text" ? (
+        <View>
+          <TextInput
+            value={props.textValue}
+            onChangeText={props.onChangeText}
+            placeholder={props.textPlaceholder}
+            editable={!props.disabled}
+            onSubmitEditing={props.onSubmitText}
+          />
+          <Pressable disabled={props.disabled || props.submitDisabled} onPress={props.onSubmitText}>
+            <Text>Send</Text>
+          </Pressable>
+        </View>
+      ) : (
+        <Pressable disabled={props.disabled} onPressIn={props.onPressIn} onPressOut={props.onPressOut}>
+          <Text>{props.actionLabel}</Text>
+        </Pressable>
+      )}
+      <Pressable onPress={props.onToggleInputMode}>
+        <Text>{props.secondaryActionLabel}</Text>
+      </Pressable>
+    </View>
+  );
+}
+
+export function AssistantScreen() {
+  return <AgentRuntimeView harness={harness} renderVoiceShell={(props) => <CustomVoiceShell {...props} />} />;
+}
+```
+
+The default renderer exposes a top-right `History` entry so the main surface can stay workspace-first instead of falling back to a chat transcript by default.
+
+## Form Blocks
+
+The built-in block set now includes `form`, so a harness can request structured input without dropping down to a custom native screen:
+
+```tsx
+import type { ScreenSchema } from "@selfme/unstable-ui";
+
+const screen: ScreenSchema = {
+  id: "task-intake",
+  blocks: [
+    {
+      id: "task-form",
+      type: "form",
+      title: "Task intake",
+      submitLabel: "Submit",
+      fields: [
+        {
+          id: "goal",
+          kind: "text",
+          label: "Primary goal",
+          required: true
+        },
+        {
+          id: "constraints",
+          kind: "multiline",
+          label: "Constraints"
+        }
+      ]
+    }
+  ]
+};
+```
+
+When the user submits the block, the runtime emits a `form.submitted` client event with the `formId` and field values.
+
+## Timeline Blocks
+
+The built-in block set also includes `timeline`, which is useful for staged agent execution, progress history, and resumable task views:
+
+```tsx
+import type { ScreenSchema } from "@selfme/unstable-ui";
+
+const screen: ScreenSchema = {
+  id: "task-timeline",
+  blocks: [
+    {
+      id: "timeline-1",
+      type: "timeline",
+      title: "Execution flow",
+      items: [
+        {
+          id: "capture",
+          title: "Capture intent",
+          status: "complete"
+        },
+        {
+          id: "plan",
+          title: "Build plan",
+          status: "active"
+        },
+        {
+          id: "deliver",
+          title: "Deliver workspace",
+          status: "pending"
+        }
+      ]
+    }
+  ]
+};
+```
+
+`timeline` works well with `screen.patched`, so the harness can advance step states without replacing the full screen.
+
+## Details Blocks
+
+The built-in block set also includes `details`, which is useful for compact task briefs, summary cards, and structured result metadata:
+
+```tsx
+import type { ScreenSchema } from "@selfme/unstable-ui";
+
+const screen: ScreenSchema = {
+  id: "task-brief",
+  blocks: [
+    {
+      id: "brief-1",
+      type: "details",
+      title: "Workspace snapshot",
+      items: [
+        {
+          id: "owner",
+          label: "Owner",
+          value: "runtime"
+        },
+        {
+          id: "status",
+          label: "Status",
+          value: "ready",
+          tone: "success"
+        }
+      ]
+    }
+  ]
+};
+```
+
+## Log Blocks
+
+The built-in block set also includes `log`. It can render static entries from the harness or resolve directly from the client runtime when `source` is set to `runtime.eventLog`:
+
+```tsx
+import type { ScreenSchema } from "@selfme/unstable-ui";
+
+const screen: ScreenSchema = {
+  id: "event-log",
+  blocks: [
+    {
+      id: "log-1",
+      type: "log",
+      title: "Recent events",
+      source: "runtime.eventLog",
+      maxItems: 20
+    }
+  ]
+};
+```
+
+This is useful for debug workspaces, transport inspection, and resume diagnostics without wiring a separate host-only panel.
+
+## Section Blocks
+
+The built-in block set also includes `section`, which groups a one-level set of child blocks under a shared heading:
+
+```tsx
+import type { ScreenSchema } from "@selfme/unstable-ui";
+
+const screen: ScreenSchema = {
+  id: "grouped-workspace",
+  blocks: [
+    {
+      id: "summary-section",
+      type: "section",
+      title: "Summary",
+      blocks: [
+        {
+          id: "summary-details",
+          type: "details",
+          items: [
+            {
+              id: "status",
+              label: "Status",
+              value: "ready",
+              tone: "success"
+            }
+          ]
+        }
+      ]
+    }
+  ]
+};
+```
+
+`section` is intentionally limited to one level of nesting in `v0.1`, which keeps the protocol constrained while still allowing grouped workspaces.
+
+## Split Blocks
+
+The built-in block set also includes `split`, which organizes a screen into two panes for primary/secondary workspace layouts:
+
+```tsx
+import type { ScreenSchema } from "@selfme/unstable-ui";
+
+const screen: ScreenSchema = {
+  id: "split-workspace",
+  blocks: [
+    {
+      id: "split-root",
+      type: "split",
+      ratio: "primary",
+      panes: [
+        {
+          id: "primary",
+          blocks: [
+            {
+              id: "primary-details",
+              type: "details",
+              items: [
+                {
+                  id: "status",
+                  label: "Status",
+                  value: "ready",
+                  tone: "success"
+                }
+              ]
+            }
+          ]
+        },
+        {
+          id: "secondary",
+          blocks: [
+            {
+              id: "secondary-log",
+              type: "log",
+              source: "runtime.eventLog"
+            }
+          ]
+        }
+      ]
+    }
+  ]
+};
+```
+
+On compact screens the panes stack vertically. On wider layouts the renderer switches to a side-by-side split.
+
+## Runtime Persistence And Event Log
+
+The runtime also accepts a persistence adapter and exposes an event log through `useAgentRuntime()`:
+
+```tsx
+import { AgentRuntimeView, useAgentRuntime, type RuntimePersistenceAdapter } from "@selfme/unstable-ui";
+
+const persistence: RuntimePersistenceAdapter = {
+  load: async () => undefined,
+  save: async (snapshot) => {
+    console.log(snapshot.eventLog);
+  }
+};
+
+function DebugPanel() {
+  const runtime = useAgentRuntime();
+  return <>{runtime.eventLog.length}</>;
+}
+
+export function AssistantScreen() {
+  return <AgentRuntimeView harness={harness} runtimeOptions={{ persistence }} />;
+}
+```
+
 ## Development
 
 ```bash

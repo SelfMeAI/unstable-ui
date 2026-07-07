@@ -37,6 +37,10 @@
           <p>
             长期稳定的是框架底盘，例如语音入口、状态展示、错误与确认机制；任务工作区则由 harness 按协议描述并驱动。
           </p>
+          <h3>2.1.1 默认不是聊天记录页</h3>
+          <p>
+            这个框架的默认首页不是传统对话列表，也不是连续聊天气泡。默认视图应该是当前工作区或当前任务页，历史对话只作为独立入口存在，用于回看和审计。
+          </p>
           <h3>2.2 动态 UI 不是任意 UI</h3>
           <p>
             不允许服务端或模型直接下发 JSX、原生代码或任意脚本。所有动态界面必须通过受约束的 block schema 表达。
@@ -125,7 +129,24 @@
         </section>
 
         <section class="section">
-          <h2>5. Artifact 与 Capability</h2>
+          <h2>5. 页面流转主线</h2>
+          <p>
+            当前代码和后续开发都应围绕一条统一主线推进，而不是把每个 screen 都当作彼此独立的静态页。
+          </p>
+          <ol>
+            <li>用户从底部固定 voice / text shell 发起输入。</li>
+            <li>runtime 进入 processing 或 task 相关状态，并根据协议锁定输入或局部交互。</li>
+            <li>harness 可以直接返回结果页，也可以先返回任务处理中间页。</li>
+            <li>任务处理中间页允许继续 patch、替换或推进到最终结果页。</li>
+            <li>最终结果页稳定后，输入重新解锁，用户可以继续发起下一轮。</li>
+          </ol>
+          <div class="note">
+            后面的动画系统必须挂在这条页面流转主线上，而不是靠渲染层临时猜测“现在是不是该动一下”。
+          </div>
+        </section>
+
+        <section class="section">
+          <h2>6. Artifact 与 Capability</h2>
           <h3>5.1 Artifact</h3>
           <p>
             agent 经常会产出链接、图片、音频、文件、HTML、PDF 等内容。框架不按来源区分，而是统一抽象成 artifact；来源可以是本地，也可以是远端。
@@ -137,7 +158,20 @@
         </section>
 
         <section class="section">
-          <h2>6. 非目标</h2>
+          <h2>7. 当前标准任务流</h2>
+          <ul>
+            <li>输入 - processing - task page - result。</li>
+            <li>输入 - processing - direct result。</li>
+            <li>action - approval - result。</li>
+            <li>form - processing - result。</li>
+          </ul>
+          <p>
+            之后新增 block、补动画、做远端示例时，都应先确认自己属于哪条标准流，避免再次回到“页面很多，但没有统一推进逻辑”的状态。
+          </p>
+        </section>
+
+        <section class="section">
+          <h2>8. 非目标</h2>
           <ul>
             <li>不做 LLM orchestration 平台。</li>
             <li>不做完整 agent framework。</li>
@@ -145,11 +179,12 @@
             <li>不让模型直接生成任意原生代码。</li>
             <li>不把 demo app 当成项目本体。</li>
             <li>不在仓库文档中继续写技术选型对比。</li>
+            <li>不在页面流和交互锁未稳定前继续做重动画实验。</li>
           </ul>
         </section>
 
         <section class="section">
-          <h2>7. 当前实现状态</h2>
+          <h2>9. 当前实现状态</h2>
           <ul>
             <li>仓库已经初始化为 npm workspace monorepo。</li>
             <li>已经补齐主包 <code class="inline">@selfme/unstable-ui</code>，作为默认安装入口。</li>
@@ -160,6 +195,8 @@
             <li>demo app 已用本地 harness 跑通最小闭环。</li>
             <li>语音入口壳、最小 artifact preview/open bridge、最小 capability request 流已实现。</li>
             <li>零依赖的 remote harness 示例服务已实现。</li>
+            <li>screen.mode、screen.interaction、history、输入锁和固定导航栏已经进入主干。</li>
+            <li>下一步重点是把 screen lifecycle 和 runtime flow controller 明确化。</li>
             <li>更完整的 artifact 渲染、真实设备桥接和更成熟的远端接入辅助仍未实现。</li>
           </ul>
         </section>

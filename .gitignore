@@ -3,6 +3,8 @@ dist
 build
 .expo
 .expo-shared
+apps/demo-expo/ios
+apps/demo-expo/android
 .DS_Store
 *.log
 coverage

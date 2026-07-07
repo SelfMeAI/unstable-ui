@@ -2,6 +2,9 @@
   "expo": {
     "name": "unstable-ui-demo",
     "slug": "unstable-ui-demo",
-    "scheme": "unstable-ui-demo"
+    "scheme": "unstable-ui-demo",
+    "ios": {
+      "bundleIdentifier": "com.anonymous.unstable-ui-demo"
+    }
   }
 }

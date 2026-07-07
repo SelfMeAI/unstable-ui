@@ -11,7 +11,7 @@ The framework is responsible for runtime state, schema rendering, artifact handl
 - `createLocalHarness`
   Use this for in-app mock flows, local task orchestration, and fast UI iteration.
 
-- `createRemoteHarness`
+- `createRemoteHttpSseHarness`
   Use this when the agent or workflow runs outside the client and streams events back to the app.
 
 - Hybrid harness
@@ -36,9 +36,11 @@ The framework is responsible for runtime state, schema rendering, artifact handl
 
 The current React Native track is optimized for a minimal but real integration loop:
 
-- fixed voice shell
+- fixed input shell with voice / text switching
+- workspace-first surface with a separate session history entry
 - schema-driven screen rendering
 - action round-trip
+- structured form round-trip
 - minimal artifact preview/open behavior
 - minimal capability request / resolve flow
 

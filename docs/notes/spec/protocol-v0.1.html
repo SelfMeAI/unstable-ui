@@ -30,6 +30,9 @@
             <li>客户端负责状态管理、渲染和把用户操作回传成结构化事件。</li>
             <li>双方通过 JSON 交互，不传可执行 UI 代码。</li>
           </ul>
+          <div class="note">
+            当前协议演进重点已经明确：优先把请求生命周期和页面流转语义补清楚，而不是继续堆更多视觉层变化。
+          </div>
         </section>
 
         <section class="section">
@@ -60,14 +63,19 @@
                   <td>已实现</td>
                 </tr>
                 <tr>
+                  <td><code class="inline">screen.patched</code></td>
+                  <td>对当前 screen 做增量 patch 更新</td>
+                  <td>已实现</td>
+                </tr>
+                <tr>
                   <td><code class="inline">artifact.available</code></td>
                   <td>声明某个 artifact 可被预览或打开</td>
-                  <td>已实现基础状态</td>
+                  <td>已实现</td>
                 </tr>
                 <tr>
                   <td><code class="inline">capability.requested</code></td>
                   <td>向客户端请求设备能力</td>
-                  <td>协议已定义，桥接未做</td>
+                  <td>已实现基础桥接</td>
                 </tr>
                 <tr>
                   <td><code class="inline">error</code></td>
@@ -108,7 +116,12 @@
                 <tr>
                   <td><code class="inline">voice.input</code></td>
                   <td>提交转写文本和可选音频地址</td>
-                  <td>协议已定义，语音壳未做</td>
+                  <td>兼容保留</td>
+                </tr>
+                <tr>
+                  <td><code class="inline">input.submitted</code></td>
+                  <td>统一提交 voice / text 双输入壳的用户输入</td>
+                  <td>已实现，推荐优先使用</td>
                 </tr>
                 <tr>
                   <td><code class="inline">action.triggered</code></td>
@@ -116,14 +129,19 @@
                   <td>已实现</td>
                 </tr>
                 <tr>
+                  <td><code class="inline">form.submitted</code></td>
+                  <td>回传结构化表单输入</td>
+                  <td>已实现</td>
+                </tr>
+                <tr>
                   <td><code class="inline">artifact.requested</code></td>
                   <td>请求 preview / open / share / download</td>
-                  <td>已实现基础状态</td>
+                  <td>已实现</td>
                 </tr>
                 <tr>
                   <td><code class="inline">capability.resolved</code></td>
                   <td>返回设备能力请求结果</td>
-                  <td>协议已定义</td>
+                  <td>已实现基础桥接</td>
                 </tr>
               </tbody>
             </table>
@@ -131,13 +149,49 @@
         </section>
 
         <section class="section">
-          <h2>4. Block 集合</h2>
+          <h2>4. Screen 语义</h2>
+          <p>
+            当前仓库已经引入 <code class="inline">screen.mode</code> 和 <code class="inline">screen.interaction</code>。screen 不再只是“长什么样”，还要表达“当前页是什么角色、允许哪些交互、为什么被锁定”。
+          </p>
+          <ul>
+            <li><code class="inline">stable</code>：稳定工作区，可继续输入或继续操作。</li>
+            <li><code class="inline">task</code>：任务处理中间页，允许持续 patch 或被后续页替换。</li>
+            <li><code class="inline">result</code>：最终结果页或阶段性结果页。</li>
+            <li><code class="inline">approval</code>：等待用户确认或设备能力决策。</li>
+            <li><code class="inline">error</code>：错误或恢复页。</li>
+          </ul>
+          <p>
+            下一步要补的不是新的基础类型，而是更正式的页面流转语义，例如当前页是 replace、临时任务页还是最终结果页，以及一轮请求结束后什么时候恢复输入。
+          </p>
+        </section>
+
+        <section class="section">
+          <h2>5. 标准任务流</h2>
+          <ul>
+            <li>输入 - processing - task page - result。</li>
+            <li>输入 - processing - direct result。</li>
+            <li>action - approval - result。</li>
+            <li>form - processing - result。</li>
+          </ul>
+          <p>
+            后面 runtime、renderer、demo harness 和动画系统，都默认围绕这几条标准流展开，不再按孤立页面来理解协议。
+          </p>
+        </section>
+
+        <section class="section">
+          <h2>6. Block 集合</h2>
           <p>当前内建 block 只保留最小集合，不追求一开始就完整。</p>
           <ul>
             <li><code class="inline">text</code>：纯文本块。</li>
             <li><code class="inline">card</code>：标题 + 正文概览块。</li>
             <li><code class="inline">list</code>：列表条目集合。</li>
             <li><code class="inline">actions</code>：一组操作按钮。</li>
+            <li><code class="inline">form</code>：结构化输入块，提交后回传 <code class="inline">form.submitted</code>。</li>
+            <li><code class="inline">timeline</code>：任务阶段时间线，适合表达 agent 进度与恢复点。</li>
+            <li><code class="inline">details</code>：紧凑结构化摘要块，适合任务 brief、结果摘要和元信息。</li>
+            <li><code class="inline">log</code>：日志流块，可直接映射 runtime event log。</li>
+            <li><code class="inline">section</code>：一层分组容器块，用来组织工作区。</li>
+            <li><code class="inline">split</code>：双 pane 布局块，用来表达主次工作区。</li>
             <li><code class="inline">resource</code>：单个 artifact 资源块。</li>
           </ul>
           <pre><code>{
@@ -148,10 +202,162 @@
     { "id": "preview-asset", "label": "Preview asset" }
   ]
 }</code></pre>
+          <pre><code>{
+  "id": "task-form",
+  "type": "form",
+  "title": "Task intake",
+  "submitLabel": "Submit",
+  "fields": [
+    {
+      "id": "goal",
+      "kind": "text",
+      "label": "Primary goal",
+      "required": true
+    },
+    {
+      "id": "constraints",
+      "kind": "multiline",
+      "label": "Constraints"
+    }
+  ]
+}</code></pre>
+          <pre><code>{
+  "id": "timeline-1",
+  "type": "timeline",
+  "title": "Execution flow",
+  "items": [
+    {
+      "id": "capture",
+      "title": "Capture intent",
+      "status": "complete"
+    },
+    {
+      "id": "plan",
+      "title": "Build plan",
+      "status": "active"
+    },
+    {
+      "id": "deliver",
+      "title": "Deliver workspace",
+      "status": "pending"
+    }
+  ]
+}</code></pre>
+          <pre><code>{
+  "id": "brief-1",
+  "type": "details",
+  "title": "Workspace snapshot",
+  "items": [
+    {
+      "id": "owner",
+      "label": "Owner",
+      "value": "runtime"
+    },
+    {
+      "id": "status",
+      "label": "Status",
+      "value": "ready",
+      "tone": "success"
+    }
+  ]
+}</code></pre>
+          <pre><code>{
+  "id": "log-1",
+  "type": "log",
+  "title": "Recent events",
+  "source": "runtime.eventLog",
+  "maxItems": 20
+}</code></pre>
+          <pre><code>{
+  "id": "summary-section",
+  "type": "section",
+  "title": "Summary",
+  "blocks": [
+    {
+      "id": "summary-details",
+      "type": "details",
+      "items": [
+        {
+          "id": "status",
+          "label": "Status",
+          "value": "ready",
+          "tone": "success"
+        }
+      ]
+    }
+  ]
+}</code></pre>
+          <pre><code>{
+  "id": "split-root",
+  "type": "split",
+  "ratio": "primary",
+  "panes": [
+    {
+      "id": "primary",
+      "blocks": [
+        {
+          "id": "primary-details",
+          "type": "details",
+          "items": [
+            {
+              "id": "status",
+              "label": "Status",
+              "value": "ready",
+              "tone": "success"
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "id": "secondary",
+      "blocks": [
+        {
+          "id": "secondary-log",
+          "type": "log",
+          "source": "runtime.eventLog"
+        }
+      ]
+    }
+  ]
+}</code></pre>
         </section>
 
         <section class="section">
-          <h2>5. Artifact</h2>
+          <h2>7. Screen Patch 操作</h2>
+          <p>当前协议已经支持最小 screen patch，用来避免每次更新都整屏替换。</p>
+          <ul>
+            <li><code class="inline">set_title</code>：更新标题。</li>
+            <li><code class="inline">set_subtitle</code>：更新副标题。</li>
+            <li><code class="inline">replace_blocks</code>：整体替换 blocks。</li>
+            <li><code class="inline">append_blocks</code>：向现有 blocks 末尾追加。</li>
+            <li><code class="inline">upsert_block</code>：按 block id 更新或插入单个 block。</li>
+            <li><code class="inline">remove_block</code>：按 block id 删除单个 block。</li>
+          </ul>
+          <pre><code>{
+  "type": "screen.patched",
+  "screenId": "home",
+  "operations": [
+    {
+      "type": "set_subtitle",
+      "subtitle": "Streaming additional blocks"
+    },
+    {
+      "type": "append_blocks",
+      "blocks": [
+        {
+          "id": "next-step",
+          "type": "text",
+          "value": "A new block arrived without replacing the full screen."
+        }
+      ]
+    }
+  ]
+}</code></pre>
+        </section>
+
+        <section class="section">
+          <h2>8. Artifact</h2>
           <p>
             Artifact 用来统一表达本地或远端产物。当前类型包括
             <code class="inline">text / image / audio / video / pdf / html / file / link / json</code>。
@@ -168,7 +374,7 @@
         </section>
 
         <section class="section">
-          <h2>6. Capability</h2>
+          <h2>9. Capability</h2>
           <p>
             Capability request 用来请求设备能力。目前协议里已预留
             <code class="inline">microphone / camera / photo-library / location / file-picker / share / open-url</code>。
@@ -184,10 +390,12 @@
         </section>
 
         <section class="section">
-          <h2>7. 当前判断</h2>
+          <h2>10. 当前判断</h2>
           <ul>
             <li>第一版协议坚持“事件 + 受约束 block schema”，不回退到任意组件代码。</li>
-            <li>artifact 与 capability 现在先在协议层定清楚，桥接能力后补。</li>
+            <li>当前已经有最小 artifact / capability / form 闭环，下一步重点先转向 lifecycle 和 flow controller。</li>
+            <li>现在已经支持最小 screen patch，但仍然保持受约束的小操作集合，不开放任意 UI diff。</li>
+            <li>当前已经具备基础 screen mode / interaction 语义，但还没有完成正式的页面流转协议。</li>
             <li>如果后续出现更复杂布局需求，优先扩展 block 和 layout schema，而不是引入可执行 UI。</li>
           </ul>
         </section>

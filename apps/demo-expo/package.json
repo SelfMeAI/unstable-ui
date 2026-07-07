@@ -10,10 +10,11 @@
     "web": "expo start --web"
   },
   "dependencies": {
-    "@selfme/unstable-ui-harness-sdk": "0.1.0-alpha.0",
-    "@selfme/unstable-ui-renderer": "0.1.0-alpha.0",
+    "@selfme/unstable-ui-harness-sdk": "0.1.0-alpha.1",
+    "@selfme/unstable-ui-renderer": "0.1.0-alpha.1",
+    "babel-preset-expo": "~57.0.0",
     "expo": "~57.0.0",
-    "react": "19.1.0",
-    "react-native": "0.81.0"
+    "react": "19.2.3",
+    "react-native": "0.86.0"
   }
 }

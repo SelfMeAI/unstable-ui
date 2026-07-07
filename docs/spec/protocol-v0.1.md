@@ -68,6 +68,33 @@ Replaces the current screen schema.
 }
 ```
 
+### `screen.patched`
+
+Applies incremental updates to the current screen when the `screenId` matches.
+
+```json
+{
+  "type": "screen.patched",
+  "screenId": "home",
+  "operations": [
+    {
+      "type": "set_subtitle",
+      "subtitle": "Streaming additional blocks"
+    },
+    {
+      "type": "append_blocks",
+      "blocks": [
+        {
+          "id": "next-step",
+          "type": "text",
+          "value": "A new block arrived without replacing the full screen."
+        }
+      ]
+    }
+  ]
+}
+```
+
 ### `artifact.available`
 
 Declares an artifact that can be previewed or opened.
@@ -148,6 +175,29 @@ Submits transcript text with an optional audio URI.
 }
 ```
 
+### `input.submitted`
+
+Submits unified user input from the bottom shell. This is the preferred event for voice/text dual-mode clients.
+
+```json
+{
+  "type": "input.submitted",
+  "mode": "text",
+  "text": "Summarize the latest workspace and propose next steps"
+}
+```
+
+For voice mode:
+
+```json
+{
+  "type": "input.submitted",
+  "mode": "voice",
+  "text": "Plan my afternoon around one deep work block",
+  "audioUri": "file:///local/session/voice.m4a"
+}
+```
+
 ### `action.triggered`
 
 Reports a user action from the rendered UI.
@@ -156,6 +206,21 @@ Reports a user action from the rendered UI.
 {
   "type": "action.triggered",
   "actionId": "show-plan"
+}
+```
+
+### `form.submitted`
+
+Returns structured values from a rendered `form` block.
+
+```json
+{
+  "type": "form.submitted",
+  "formId": "task-form",
+  "values": {
+    "goal": "Ship the next runtime milestone",
+    "constraints": "Need one review pass before publish"
+  }
 }
 ```
 
@@ -203,15 +268,215 @@ type Screen = {
 };
 ```
 
+## Screen Patch Operations in v0.1
+
+- `set_title`
+- `set_subtitle`
+- `replace_blocks`
+- `append_blocks`
+- `upsert_block`
+- `remove_block`
+
 ## Supported Blocks in v0.1
 
 - `text`
 - `card`
 - `list`
 - `actions`
+- `form`
+- `timeline`
+- `details`
+- `log`
+- `section`
+- `split`
 - `resource`
 
 The first release intentionally keeps the built-in block set constrained.
+
+### `form` Block
+
+```json
+{
+  "id": "task-form",
+  "type": "form",
+  "title": "Task intake",
+  "submitLabel": "Submit",
+  "fields": [
+    {
+      "id": "goal",
+      "kind": "text",
+      "label": "Primary goal",
+      "required": true
+    },
+    {
+      "id": "constraints",
+      "kind": "multiline",
+      "label": "Constraints"
+    }
+  ]
+}
+```
+
+### `timeline` Block
+
+```json
+{
+  "id": "timeline-1",
+  "type": "timeline",
+  "title": "Execution flow",
+  "items": [
+    {
+      "id": "capture",
+      "title": "Capture intent",
+      "status": "complete"
+    },
+    {
+      "id": "plan",
+      "title": "Build plan",
+      "status": "active"
+    },
+    {
+      "id": "deliver",
+      "title": "Deliver workspace",
+      "status": "pending"
+    }
+  ]
+}
+```
+
+Supported item statuses in `v0.1`:
+
+- `pending`
+- `active`
+- `complete`
+- `error`
+
+### `details` Block
+
+```json
+{
+  "id": "brief-1",
+  "type": "details",
+  "title": "Workspace snapshot",
+  "items": [
+    {
+      "id": "owner",
+      "label": "Owner",
+      "value": "runtime"
+    },
+    {
+      "id": "status",
+      "label": "Status",
+      "value": "ready",
+      "tone": "success"
+    }
+  ]
+}
+```
+
+Supported detail tones in `v0.1`:
+
+- `default`
+- `success`
+- `warning`
+- `danger`
+
+### `log` Block
+
+```json
+{
+  "id": "log-1",
+  "type": "log",
+  "title": "Recent events",
+  "source": "runtime.eventLog",
+  "maxItems": 20
+}
+```
+
+`log` can be driven in two ways:
+
+- `items`: the harness provides explicit log entries.
+- `source`: the client runtime resolves a built-in source such as `runtime.eventLog`.
+
+Supported log tones in `v0.1`:
+
+- `default`
+- `success`
+- `warning`
+- `danger`
+
+### `section` Block
+
+```json
+{
+  "id": "summary-section",
+  "type": "section",
+  "title": "Summary",
+  "blocks": [
+    {
+      "id": "summary-details",
+      "type": "details",
+      "items": [
+        {
+          "id": "status",
+          "label": "Status",
+          "value": "ready",
+          "tone": "success"
+        }
+      ]
+    }
+  ]
+}
+```
+
+`section` supports one level of nested child blocks in `v0.1`. Child blocks can be any built-in block except another `section`.
+
+### `split` Block
+
+```json
+{
+  "id": "split-root",
+  "type": "split",
+  "ratio": "primary",
+  "panes": [
+    {
+      "id": "primary",
+      "blocks": [
+        {
+          "id": "primary-details",
+          "type": "details",
+          "items": [
+            {
+              "id": "status",
+              "label": "Status",
+              "value": "ready",
+              "tone": "success"
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "id": "secondary",
+      "blocks": [
+        {
+          "id": "secondary-log",
+          "type": "log",
+          "source": "runtime.eventLog"
+        }
+      ]
+    }
+  ]
+}
+```
+
+`split` supports exactly two panes in `v0.1`. Pane blocks can be any built-in block except another `split`.
+
+Supported ratios in `v0.1`:
+
+- `equal`
+- `primary`
+- `secondary`
 
 ## Artifact Schema
 
@@ -241,6 +506,6 @@ type ArtifactRef = {
 
 ## Notes
 
-- `v0.1` uses full screen replacement through `screen.updated`.
-- Streaming screen patches are intentionally out of scope for this draft.
+- `v0.1` supports both full screen replacement through `screen.updated` and minimal incremental updates through `screen.patched`.
+- Screen patches are intentionally constrained to a small set of metadata and block operations.
 - The protocol is position-agnostic: the harness may run locally, remotely, or in a hybrid topology.
