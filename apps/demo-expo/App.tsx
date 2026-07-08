@@ -1,23 +1,39 @@
 import {
+  Animated,
+  StyleSheet,
+  View
+} from "react-native";
+import {
   AgentRuntimeView,
   type ArtifactHandlers,
-  type CapabilityHandlers
+  type CapabilityHandlers,
+  type VoiceShellOptions
 } from "@selfme/unstable-ui-renderer";
 import {
+  applyScreenFlow as applyFlow,
+  createCompletedScreenFlow as createCompletedFlow,
   createLocalHarness,
+  createOngoingScreenFlow as createOngoingFlow,
+  createProcessingScreen,
   createRemoteHttpSseHarness,
+  createResultScreen,
+  createRootScreenFlow as createRootFlow,
+  createStableScreen,
+  createTaskScreen,
   type LocalHarnessOptions,
   type RemoteSessionSnapshot,
   type RemoteSessionStore
 } from "@selfme/unstable-ui-harness-sdk";
 import {
   type ArtifactRef,
-  type ScreenInteraction,
-  type ScreenMode,
   type ScreenPatchOperation,
   type ScreenSchema
 } from "@selfme/unstable-ui-protocol";
 import type { RuntimePersistenceAdapter, RuntimeSnapshot } from "@selfme/unstable-ui-runtime";
+import {
+  DemoTransitionOverlay,
+  useDemoScreenTransition
+} from "./demo-transition";
 
 const linkedArtifact: ArtifactRef = {
   id: "artifact-1",
@@ -36,6 +52,17 @@ const reportArtifact: ArtifactRef = {
   source: "remote",
   title: "Unstable UI report surface",
   mimeType: "text/html",
+  previewable: true,
+  openable: true
+};
+
+const pdfArtifact: ArtifactRef = {
+  id: "pdf-1",
+  kind: "pdf",
+  uri: "https://www.w3.org/WAI/ER/tests/xhtml/testfiles/resources/pdf/dummy.pdf",
+  source: "remote",
+  title: "Sample PDF artifact",
+  mimeType: "application/pdf",
   previewable: true,
   openable: true
 };
@@ -62,6 +89,17 @@ const demoArtifactHandlers: ArtifactHandlers = {
       ],
       openLabel: "Open report"
     })
+  },
+  pdf: {
+    preview: (artifact) => ({
+      title: artifact.title ?? "PDF artifact",
+      description: "Custom preview handler registered by the host app for PDF artifacts.",
+      fields: [
+        { label: "Document", value: artifact.uri },
+        { label: "MIME", value: artifact.mimeType ?? "application/pdf" }
+      ],
+      openLabel: "Open PDF"
+    })
   }
 };
 
@@ -87,6 +125,22 @@ const demoCapabilityHandlers: CapabilityHandlers = {
       }
     })
   }
+};
+
+const demoVoiceShell: VoiceShellOptions = {
+  promptLabel: "Voice-first shell. Hold to simulate speech, or switch to text for direct harness requests.",
+  idleLabel: "Hold to talk",
+  listeningLabel: "Listening",
+  textPlaceholder: "Type a request for the runtime",
+  talkButtonLabel: "Speak",
+  listeningButtonLabel: "Release",
+  textSubmitLabel: "Send",
+  recentInputHeadingLabel: "Recent",
+  recentInputCollapsedLabel: "LAST",
+  recentInputExpandedLabel: "HIDE",
+  voiceModeChipLabel: "MIC",
+  textModeChipLabel: "TYPE",
+  recentInputMaxLines: 3
 };
 
 const demoRuntimeStore = globalThis as typeof globalThis & {
@@ -126,6 +180,8 @@ function delay(ms: number) {
 
 function getDemoArtifact(artifactId: string) {
   switch (artifactId) {
+    case pdfArtifact.id:
+      return pdfArtifact;
     case reportArtifact.id:
       return reportArtifact;
     case linkedArtifact.id:
@@ -136,50 +192,6 @@ function getDemoArtifact(artifactId: string) {
 
 type InputFlowMode = "sequence" | "random";
 type DemoEmit = Parameters<NonNullable<LocalHarnessOptions["bootstrap"]>>[0];
-
-const defaultScreenInteraction: ScreenInteraction = {
-  input: "enabled",
-  actions: "enabled",
-  forms: "enabled",
-  artifacts: "enabled",
-  history: "enabled"
-};
-
-function withScreenState(
-  screen: Omit<ScreenSchema, "mode" | "interaction">,
-  mode: ScreenMode,
-  interaction: Partial<ScreenInteraction> = {}
-): ScreenSchema {
-  return {
-    ...screen,
-    mode,
-    interaction: {
-      ...defaultScreenInteraction,
-      ...interaction
-    }
-  };
-}
-
-function createStableScreen(
-  screen: Omit<ScreenSchema, "mode" | "interaction">,
-  interaction: Partial<ScreenInteraction> = {}
-) {
-  return withScreenState(screen, "stable", interaction);
-}
-
-function createTaskScreen(
-  screen: Omit<ScreenSchema, "mode" | "interaction">,
-  interaction: Partial<ScreenInteraction> = {}
-) {
-  return withScreenState(screen, "task", interaction);
-}
-
-function createResultScreen(
-  screen: Omit<ScreenSchema, "mode" | "interaction">,
-  interaction: Partial<ScreenInteraction> = {}
-) {
-  return withScreenState(screen, "result", interaction);
-}
 
 const inputFlowActions = [
   { id: "set-input-flow-sequence", label: "Sequential routing" },
@@ -194,6 +206,10 @@ const everydayScenarioActions = [
 ] as const;
 
 const workspaceScenarioActions = [
+  { id: "show-flow-lab", label: "Flow lab" },
+  { id: "show-verification", label: "Verification board" },
+  { id: "show-playground", label: "Playground" },
+  { id: "show-direct", label: "Direct result" },
   { id: "show-plan", label: "Staged plan" },
   { id: "show-timeline", label: "Task timeline" },
   { id: "show-brief", label: "Task brief" },
@@ -207,11 +223,18 @@ const workspaceScenarioActions = [
 const systemScenarioActions = [
   { id: "preview-asset", label: "Link artifact" },
   { id: "show-report", label: "HTML report" },
+  { id: "show-pdf", label: "PDF artifact" },
   { id: "request-microphone", label: "Microphone bridge" },
+  { id: "request-open-url", label: "Open URL bridge" },
+  { id: "request-share", label: "Share bridge" },
   { id: "simulate-error", label: "Harness error" }
 ] as const;
 
 const quickTestActions = [
+  { id: "show-flow-lab", label: "Open flow lab" },
+  { id: "show-verification", label: "Open verification" },
+  { id: "show-playground", label: "Open playground" },
+  { id: "show-direct", label: "Test direct result" },
   { id: "show-plan", label: "Test staged plan" },
   { id: "show-timeline", label: "Test timeline" },
   { id: "show-workspace", label: "Test workspace" },
@@ -222,7 +245,196 @@ const autoInputScenarioActions = [
   ...everydayScenarioActions,
   ...workspaceScenarioActions,
   { id: "preview-asset", label: "Link artifact" },
-  { id: "show-report", label: "HTML report" }
+  { id: "show-report", label: "HTML report" },
+  { id: "show-pdf", label: "PDF artifact" }
+] as const;
+
+const runtimeInspectActions = [
+  { id: "show-verification", label: "Verify request flow" },
+  { id: "show-playground", label: "Inspect runtime" },
+  { id: "show-log", label: "Open event log" },
+  { id: "back-home", label: "Back home" }
+] as const;
+
+const flowLabResultFollowUpActions = [
+  { id: "show-playground", label: "Inspect runtime" },
+  { id: "show-log", label: "Open event log" },
+  { id: "show-flow-lab", label: "Back to flow lab" },
+  { id: "back-home", label: "Back home" }
+] as const;
+
+type FlowLabVerificationStep = {
+  id: string;
+  title: string;
+  description: string;
+};
+
+type FlowLabCaseDefinition = {
+  id: string;
+  title: string;
+  summary: string;
+  path: string;
+  requestSource: string;
+  lockExpectation: string;
+  historyExpectation: string;
+  inspectNote: string;
+  verification: readonly FlowLabVerificationStep[];
+  actions: readonly { id: string; label: string }[];
+};
+
+const flowLabRecommendedPass = [
+  {
+    id: "flow-lab-pass-direct",
+    title: "Pass 1: direct flow",
+    description: "Run the shortest lifecycle first and confirm one requestId survives processing -> result."
+  },
+  {
+    id: "flow-lab-pass-task",
+    title: "Pass 2: task flow",
+    description: "Run a staged workspace flow and confirm input stays locked through processing and task screens."
+  },
+  {
+    id: "flow-lab-pass-form",
+    title: "Pass 3: form flow",
+    description: "Submit structured fields and confirm the form row is attached to the same request chain."
+  },
+  {
+    id: "flow-lab-pass-approval",
+    title: "Pass 4: approval flow",
+    description: "Trigger capability approval and confirm the result payload lands on the final result surface."
+  },
+  {
+    id: "flow-lab-pass-shell",
+    title: "Pass 5: shell routing",
+    description: "Submit one voice request and one text request from the floating shell, then confirm request source changes accordingly."
+  }
+] as const;
+
+const flowLabCaseDefinitions: readonly FlowLabCaseDefinition[] = [
+  {
+    id: "direct",
+    title: "Direct flow",
+    summary: "Shortest request lifecycle. Good first pass for request identity and completion cleanup.",
+    path: "processing -> result",
+    requestSource: "action or routed voice/text input",
+    lockExpectation: "Input locked only during processing",
+    historyExpectation: "One grouped request chain with one workspace handoff",
+    inspectNote: "Current request summary should end at result",
+    verification: [
+      {
+        id: "direct-check-request",
+        title: "Confirm one request chain",
+        description: "The same requestId should appear from input through the final result screen."
+      },
+      {
+        id: "direct-check-lock",
+        title: "Confirm short lock window",
+        description: "Input should unlock as soon as the direct result is released."
+      },
+      {
+        id: "direct-check-complete",
+        title: "Confirm clean completion",
+        description: "Runtime flow should settle to complete, then waiting, without intermediate task state."
+      }
+    ],
+    actions: [{ id: "show-direct", label: "Run direct flow" }]
+  },
+  {
+    id: "task",
+    title: "Task flow",
+    summary: "Baseline staged lifecycle with explicit task workspace before the final result surface.",
+    path: "processing -> task -> finalizing -> result",
+    requestSource: "action or routed voice/text input",
+    lockExpectation: "Input locked during processing and task stages",
+    historyExpectation: "One grouped request chain across all staged workspace screens",
+    inspectNote: "Timeline variant should also show patched workspace updates inside the same request chain",
+    verification: [
+      {
+        id: "task-check-stage",
+        title: "Confirm staged screen progression",
+        description: "You should see processing, task workspace, finalizing, then result in one uninterrupted chain."
+      },
+      {
+        id: "task-check-lock",
+        title: "Confirm long-running lock",
+        description: "Input should stay locked through both task scaffolding and finalization."
+      },
+      {
+        id: "task-check-history",
+        title: "Confirm grouped history",
+        description: "History and current request history should keep every staged workspace event under one request."
+      }
+    ],
+    actions: [
+      { id: "show-plan", label: "Run task flow" },
+      { id: "show-timeline", label: "Run timeline flow" }
+    ]
+  },
+  {
+    id: "form",
+    title: "Structured submission flow",
+    summary: "Verifies that protocol-native form submission participates in the same request lifecycle model.",
+    path: "form -> processing -> finalizing -> result",
+    requestSource: "form submission",
+    lockExpectation: "Form submit should attach one requestId to all follow-up stages",
+    historyExpectation: "The form row and every follow-up workspace row should stay grouped",
+    inspectNote: "Current request history should include the form submission row",
+    verification: [
+      {
+        id: "form-check-submit",
+        title: "Confirm form-origin request",
+        description: "The active request should be sourced from form submission rather than generic action input."
+      },
+      {
+        id: "form-check-history",
+        title: "Confirm form row retention",
+        description: "Current request history should keep the submitted values attached to the same request chain."
+      },
+      {
+        id: "form-check-result",
+        title: "Confirm structured echo",
+        description: "The final result should reflect the submitted fields without losing request continuity."
+      }
+    ],
+    actions: [{ id: "show-form", label: "Run form flow" }]
+  },
+  {
+    id: "approval",
+    title: "Approval flow",
+    summary: "Capability requests pause the request chain until the host or user resolves the bridge decision.",
+    path: "approval -> result",
+    requestSource: "action-triggered capability request",
+    lockExpectation: "Input should lock while capability choice is unresolved",
+    historyExpectation: "Capability request and resolution should remain attached to one request chain",
+    inspectNote: "Result should show payload returned by capability resolution",
+    verification: [
+      {
+        id: "approval-check-lock",
+        title: "Confirm approval lock",
+        description: "The input shell should stay locked until the capability request is granted or denied."
+      },
+      {
+        id: "approval-check-history",
+        title: "Confirm capability grouping",
+        description: "History should show the request, approval state, and result payload under the same requestId."
+      },
+      {
+        id: "approval-check-payload",
+        title: "Confirm payload landing",
+        description: "The final result surface should show the capability payload returned by the host bridge."
+      }
+    ],
+    actions: [{ id: "request-microphone", label: "Run approval flow" }]
+  }
+] as const;
+
+const flowLabBridgeActions = [
+  { id: "request-open-url", label: "Test open URL" },
+  { id: "request-share", label: "Test share" },
+  { id: "preview-asset", label: "Test artifact" },
+  { id: "show-pdf", label: "Test download" },
+  { id: "simulate-error", label: "Test error" },
+  { id: "back-home", label: "Back home" }
 ] as const;
 
 function getInputFlowModeLabel(mode: InputFlowMode) {
@@ -350,100 +562,726 @@ function createHomeScreen(
   });
 }
 
-function buildPlanScaffoldScreen(): ScreenSchema {
-  return createTaskScreen(
+function buildProcessingStageScreen(
+  id: string,
+  title: string,
+  subtitle: string,
+  message: string,
+  requestId?: string
+): ScreenSchema {
+  return createProcessingScreen(
     {
-    id: "plan",
-    title: "Generated task plan",
-    subtitle: "Streaming plan blocks",
+      id,
+      title,
+      subtitle,
+      blocks: [
+        {
+          id: `${id}-processing-text`,
+          type: "text",
+          value: message
+        },
+        {
+          id: `${id}-processing-card`,
+          type: "card",
+          title: "Processing",
+          body: "The harness is assembling the next workspace state."
+        }
+      ]
+    },
+    {
+      input: "locked",
+      actions: "locked",
+      forms: "locked",
+      reason: "The harness is processing the current request."
+    },
+    createOngoingFlow(requestId)
+  );
+}
+
+function buildFlowLabScreen(): ScreenSchema {
+  const standardFlowBlocks = flowLabCaseDefinitions.flatMap((flowCase) => [
+    {
+      id: `flow-lab-${flowCase.id}-details`,
+      type: "details" as const,
+      title: flowCase.title,
+      description: flowCase.summary,
+      items: [
+        { id: `flow-lab-${flowCase.id}-path`, label: "Path", value: flowCase.path },
+        { id: `flow-lab-${flowCase.id}-source`, label: "Request source", value: flowCase.requestSource },
+        { id: `flow-lab-${flowCase.id}-lock`, label: "Lock expectation", value: flowCase.lockExpectation },
+        { id: `flow-lab-${flowCase.id}-history`, label: "History expectation", value: flowCase.historyExpectation },
+        { id: `flow-lab-${flowCase.id}-inspect`, label: "Inspect", value: flowCase.inspectNote }
+      ]
+    },
+    {
+      id: `flow-lab-${flowCase.id}-checklist`,
+      type: "list" as const,
+      items: [...flowCase.verification]
+    },
+    {
+      id: `flow-lab-${flowCase.id}-actions`,
+      type: "actions" as const,
+      items: [...flowCase.actions]
+    }
+  ]);
+
+  return createStableScreen({
+    id: "flow-lab",
+    title: "Flow lab",
+    subtitle: "Manual test entry for standard runtime flows",
     blocks: [
       {
-        id: "plan-intro",
+        id: "flow-lab-intro",
         type: "text",
-        value: "The harness has started planning and is streaming the workspace in stages."
+        value: "Use this page to trigger the framework's baseline request flows without hunting through the home screen."
       },
       {
-        id: "plan-status",
-        type: "card",
-        title: "Plan stream",
-        body: "Collecting steps and preparing follow-up actions."
+        id: "flow-lab-rules",
+        type: "section",
+        title: "Verification rules",
+        description: "These checks should hold across every baseline flow.",
+        blocks: [
+          {
+            id: "flow-lab-rules-details",
+            type: "details",
+            items: [
+              { id: "flow-lab-rule-request", label: "Request identity", value: "One requestId should carry the whole flow" },
+              { id: "flow-lab-rule-locks", label: "Input locks", value: "Processing and task stages should lock input" },
+              { id: "flow-lab-rule-history", label: "History grouping", value: "History should group the chain by request" },
+              { id: "flow-lab-rule-debug", label: "Debug surface", value: "Inspect Verification board or Runtime playground after each result" }
+            ]
+          },
+          {
+            id: "flow-lab-rules-list",
+            type: "list",
+            items: [
+              { id: "flow-lab-step-1", title: "Run one baseline flow", description: "Use the sections below instead of hopping between unrelated demo pages." },
+              { id: "flow-lab-step-2", title: "Open verification board", description: "Check current or last completed request summary before falling back to raw logs." },
+              { id: "flow-lab-step-3", title: "Open event log if needed", description: "Use it only when you need transport order and low-level status transitions." }
+            ]
+          }
+        ]
+      },
+      {
+        id: "flow-lab-recommended-pass",
+        type: "section",
+        title: "Recommended pass",
+        description: "Use this order when validating the baseline runtime behavior end to end.",
+        blocks: [
+          {
+            id: "flow-lab-recommended-pass-list",
+            type: "list",
+            items: [...flowLabRecommendedPass]
+          }
+        ]
+      },
+      {
+        id: "flow-lab-standard-flows",
+        type: "section",
+        title: "Standard flows",
+        description: "These are the main runtime lifecycle baselines.",
+        blocks: standardFlowBlocks
+      },
+      {
+        id: "flow-lab-metrics-section",
+        type: "section",
+        title: "Metric hints",
+        description: "Use the runtime counters to quickly judge whether a request behaved as expected.",
+        blocks: [
+          {
+            id: "flow-lab-metrics-details",
+            type: "details",
+            items: [
+              { id: "flow-lab-metric-direct", label: "Direct flow", value: "Patch events should stay at 0" },
+              { id: "flow-lab-metric-timeline", label: "Timeline flow", value: "Patch events should be greater than 0" },
+              { id: "flow-lab-metric-task", label: "Task flows", value: "Workspace events should be greater than 1" },
+              { id: "flow-lab-metric-approval", label: "Approval flow", value: "Resource events should include at least one capability event" },
+              { id: "flow-lab-metric-form", label: "Form flow", value: "Source should resolve to form and history should keep one grouped chain" }
+            ]
+          }
+        ]
+      },
+      {
+        id: "flow-lab-shell-section",
+        type: "section",
+        title: "Shell route checks",
+        description: "Baseline flow buttons validate screen lifecycles. The floating shell validates the voice-first request path.",
+        blocks: [
+          {
+            id: "flow-lab-shell-details",
+            type: "details",
+            items: [
+              {
+                id: "flow-lab-shell-source",
+                label: "Expected source",
+                value: "voice for hold-to-talk, input for typed submit"
+              },
+              {
+                id: "flow-lab-shell-routing",
+                label: "Routing",
+                value: "Shell submissions should open one routed scene from the existing scenario pool"
+              },
+              {
+                id: "flow-lab-shell-inspect",
+                label: "Inspect",
+                value: "Check runtime.currentRequest and runtime.currentRequestHistory immediately after each submit"
+              }
+            ]
+          },
+          {
+            id: "flow-lab-shell-list",
+            type: "list",
+            items: [
+              {
+                id: "flow-lab-shell-step-1",
+                title: "Run one voice request",
+                description: "Hold the floating voice button, release, and inspect that the runtime source resolves to voice."
+              },
+              {
+                id: "flow-lab-shell-step-2",
+                title: "Run one text request",
+                description: "Switch to text mode, submit a short request, and confirm the runtime source resolves to input."
+              },
+              {
+                id: "flow-lab-shell-step-3",
+                title: "Confirm request continuity",
+                description: "Each shell submission should still produce one grouped request chain in history and the current request log."
+              }
+            ]
+          }
+        ]
+      },
+      {
+        id: "flow-lab-debug-section",
+        type: "section",
+        title: "Debug surfaces",
+        description: "Use these after running any baseline flow.",
+        blocks: [
+          {
+            id: "flow-lab-debug-actions",
+            type: "actions",
+            items: [
+              { id: "show-verification", label: "Open verification" },
+              { id: "show-playground", label: "Open playground" },
+              { id: "show-log", label: "Open event log" },
+              { id: "show-workspace", label: "Open workspace" }
+            ]
+          }
+        ]
+      },
+      {
+        id: "flow-lab-bridge-section",
+        type: "section",
+        title: "Bridge checks",
+        description: "Use these to validate bridge behavior outside the baseline flow set.",
+        blocks: [
+          {
+            id: "flow-lab-bridge-actions",
+            type: "actions",
+            items: [...flowLabBridgeActions]
+          }
+        ]
       }
     ]
+  });
+}
+
+function buildRuntimePlaygroundScreen(): ScreenSchema {
+  return createStableScreen({
+    id: "runtime-playground",
+    title: "Runtime playground",
+    subtitle: "Debug surface for flow, history, events, and bridge behavior",
+    blocks: [
+      {
+        id: "playground-session-details",
+        type: "details",
+        title: "Runtime session",
+        description: "Resolved directly from runtime.session.",
+        source: "runtime.session"
+      },
+      {
+        id: "playground-flow-details",
+        type: "details",
+        title: "Request flow",
+        description: "Resolved directly from runtime.flow.",
+        source: "runtime.flow"
+      },
+      {
+        id: "playground-current-request-details",
+        type: "details",
+        title: "Current request summary",
+        description: "Resolved from the active request-aware runtime state.",
+        source: "runtime.currentRequest"
+      },
+      {
+        id: "playground-last-completed-request-details",
+        type: "details",
+        title: "Last completed request",
+        description: "Resolved from runtime.flow.lastCompletedRequestId and the persisted history chain.",
+        source: "runtime.lastCompletedRequest"
+      },
+      {
+        id: "playground-interaction-details",
+        type: "details",
+        title: "Interaction locks",
+        description: "Resolved directly from runtime.interaction.",
+        source: "runtime.interaction"
+      },
+      {
+        id: "playground-actions",
+        type: "actions",
+        items: [
+          { id: "show-flow-lab", label: "Open flow lab" },
+          { id: "show-log", label: "Open event log" },
+          { id: "show-workspace", label: "Open workspace" },
+          { id: "back-home", label: "Back home" }
+        ]
+      },
+      {
+        id: "playground-history-section",
+        type: "section",
+        title: "Session history",
+        description: "Rendered directly from runtime.history inside the dynamic screen.",
+        blocks: [
+          {
+            id: "playground-history-log",
+            type: "log",
+            title: "History stream",
+            source: "runtime.history",
+            maxItems: 10,
+            emptyLabel: "No history entries recorded yet."
+          }
+        ]
+      },
+      {
+        id: "playground-current-request-section",
+        type: "section",
+        title: "Current request chain",
+        description: "Shows only the history entries attached to the active runtime.flow.requestId.",
+        blocks: [
+          {
+            id: "playground-current-request-log",
+            type: "log",
+            title: "Current request history",
+            source: "runtime.currentRequestHistory",
+            maxItems: 8,
+            emptyLabel: "No active request chain is attached right now."
+          }
+        ]
+      },
+      {
+        id: "playground-events-section",
+        type: "section",
+        title: "Runtime events",
+        description: "Rendered directly from runtime.eventLog for transport-level inspection.",
+        blocks: [
+          {
+            id: "playground-event-log",
+            type: "log",
+            title: "Event stream",
+            source: "runtime.eventLog",
+            maxItems: 10,
+            emptyLabel: "No event log entries recorded yet."
+          }
+        ]
+      },
+      {
+        id: "playground-last-completed-request-section",
+        type: "section",
+        title: "Last completed request chain",
+        description: "Shows the latest fully completed request chain even after the runtime has returned to waiting.",
+        blocks: [
+          {
+            id: "playground-last-completed-request-log",
+            type: "log",
+            title: "Last completed request history",
+            source: "runtime.lastCompletedRequestHistory",
+            maxItems: 8,
+            emptyLabel: "No completed request chain has been recorded yet."
+          }
+        ]
+      },
+      {
+        id: "playground-resources-section",
+        type: "section",
+        title: "Bridge resources",
+        description: "Use these blocks to validate preview, open, share, and download behavior.",
+        blocks: [
+          { id: "playground-resource-link", type: "resource", resource: linkedArtifact },
+          { id: "playground-resource-report", type: "resource", resource: reportArtifact },
+          { id: "playground-resource-pdf", type: "resource", resource: pdfArtifact }
+        ]
+      }
+    ]
+  });
+}
+
+function buildVerificationBoardScreen(): ScreenSchema {
+  return createStableScreen({
+    id: "verification-board",
+    title: "Verification board",
+    subtitle: "Fast request-flow validation surface",
+    blocks: [
+      {
+        id: "verification-intro",
+        type: "text",
+        value:
+          "Use this surface after any voice, text, action, form, or approval flow. It is meant to answer whether the request chain behaved correctly without reading the entire event stream."
+      },
+      {
+        id: "verification-rules-section",
+        type: "section",
+        title: "What to verify",
+        blocks: [
+          {
+            id: "verification-rules-details",
+            type: "details",
+            items: [
+              { id: "verification-rule-1", label: "Identity", value: "One requestId should represent one full flow" },
+              { id: "verification-rule-2", label: "Locking", value: "Processing and task phases should temporarily lock input" },
+              { id: "verification-rule-3", label: "Completion", value: "Completed flows should remain inspectable through last completed request" }
+            ]
+          }
+        ]
+      },
+      {
+        id: "verification-flow-details",
+        type: "details",
+        title: "Runtime flow",
+        description: "Current request pointer and last completed request pointer.",
+        source: "runtime.flow"
+      },
+      {
+        id: "verification-current-request-verdict",
+        type: "details",
+        title: "Current request verdict",
+        description: "Top-level evaluation for the active request chain.",
+        source: "runtime.currentRequestVerdict"
+      },
+      {
+        id: "verification-last-request-verdict",
+        type: "details",
+        title: "Completed request verdict",
+        description: "Top-level evaluation for the most recent completed request chain.",
+        source: "runtime.lastCompletedRequestVerdict"
+      },
+      {
+        id: "verification-metric-guide",
+        type: "section",
+        title: "Metric guide",
+        description: "Interpret the runtime counters before you drill into the raw request logs.",
+        blocks: [
+          {
+            id: "verification-metric-guide-details",
+            type: "details",
+            items: [
+              { id: "verification-metric-events", label: "Request events", value: "Counts every history entry attached to the active request" },
+              { id: "verification-metric-workspace", label: "Workspace events", value: "Should rise when the harness updates or patches the screen" },
+              { id: "verification-metric-patches", label: "Patch events", value: "Only increments for screen.patched and should stay 0 for direct flows" },
+              { id: "verification-metric-resources", label: "Resource events", value: "Captures artifacts and capability request/resolve activity" },
+              { id: "verification-metric-issues", label: "Issues", value: "Any non-zero issue count means the chain needs review" }
+            ]
+          }
+        ]
+      },
+      {
+        id: "verification-current-request-details",
+        type: "details",
+        title: "Current request chain",
+        description: "If a flow is still active, inspect it here first.",
+        source: "runtime.currentRequest"
+      },
+      {
+        id: "verification-current-request-assertions",
+        type: "details",
+        title: "Current request assertions",
+        description: "High-level checks derived from the active request chain.",
+        source: "runtime.currentRequestAssertions"
+      },
+      {
+        id: "verification-current-request-matrix",
+        type: "details",
+        title: "Current request matrix",
+        description: "Profile-specific pass/fail checks for the active request chain.",
+        source: "runtime.currentRequestMatrix"
+      },
+      {
+        id: "verification-last-request-details",
+        type: "details",
+        title: "Last completed request chain",
+        description: "If the runtime already returned to waiting, inspect the last completed chain here.",
+        source: "runtime.lastCompletedRequest"
+      },
+      {
+        id: "verification-last-request-assertions",
+        type: "details",
+        title: "Completed request assertions",
+        description: "High-level checks derived from the most recent completed request chain.",
+        source: "runtime.lastCompletedRequestAssertions"
+      },
+      {
+        id: "verification-last-request-matrix",
+        type: "details",
+        title: "Completed request matrix",
+        description: "Profile-specific pass/fail checks for the most recent completed chain.",
+        source: "runtime.lastCompletedRequestMatrix"
+      },
+      {
+        id: "verification-lock-details",
+        type: "details",
+        title: "Interaction locks",
+        description: "Use this to confirm shell and form locking behavior.",
+        source: "runtime.interaction"
+      },
+      {
+        id: "verification-request-logs",
+        type: "section",
+        title: "Request logs",
+        description: "Compare active and completed chains without opening the full session history.",
+        blocks: [
+          {
+            id: "verification-current-request-log",
+            type: "log",
+            title: "Current request history",
+            source: "runtime.currentRequestHistory",
+            maxItems: 6,
+            emptyLabel: "No active request chain."
+          },
+          {
+            id: "verification-last-request-log",
+            type: "log",
+            title: "Last completed request history",
+            source: "runtime.lastCompletedRequestHistory",
+            maxItems: 6,
+            emptyLabel: "No completed request chain yet."
+          }
+        ]
+      },
+      {
+        id: "verification-actions",
+        type: "actions",
+        items: [
+          { id: "show-flow-lab", label: "Open flow lab" },
+          { id: "show-playground", label: "Open playground" },
+          { id: "show-log", label: "Open event log" },
+          { id: "back-home", label: "Back home" }
+        ]
+      }
+    ]
+  });
+}
+
+function buildPlanScaffoldScreen(requestId?: string): ScreenSchema {
+  return createTaskScreen(
+    {
+      id: "plan",
+      title: "Generated task plan",
+      subtitle: "Task workspace is taking shape",
+      blocks: [
+        {
+          id: "plan-intro",
+          type: "text",
+          value: "The harness has moved past the processing shell and is now building a task workspace."
+        },
+        {
+          id: "plan-status",
+          type: "card",
+          title: "Task stage",
+          body: "Collecting steps and preparing follow-up actions."
+        }
+      ]
     },
     {
       input: "locked",
       actions: "locked",
       forms: "locked",
       reason: "The harness is still building the task plan."
-    }
+    },
+    createOngoingFlow(requestId)
   );
 }
 
-function buildPlanPatchOperations(): ScreenPatchOperation[] {
-  return [
-    {
-      type: "set_subtitle" as const,
-      subtitle: "Returned by the local harness"
-    },
-    {
-      type: "upsert_block" as const,
-      block: {
-        id: "plan-status",
-        type: "card" as const,
-        title: "Plan stream",
-        body: "The harness incrementally patched the workspace instead of replacing the full screen."
+function buildDirectResultScreen(): ScreenSchema {
+  return createResultScreen({
+    id: "direct-result",
+    title: "Direct result surface",
+    subtitle: "Result returned without an intermediate task workspace",
+    blocks: [
+      {
+        id: "direct-result-intro",
+        type: "text",
+        value: "The harness resolved this request without opening a task screen. This is the shortest standard page flow."
+      },
+      {
+        id: "direct-result-details",
+        type: "details",
+        title: "Flow summary",
+        items: [
+          { id: "direct-result-stage-1", label: "Request path", value: "processing -> result" },
+          { id: "direct-result-stage-2", label: "Workspace", value: "Skipped intermediate task page" },
+          { id: "direct-result-stage-3", label: "State", value: "Ready for next input", tone: "success" }
+        ]
+      },
+      {
+        id: "direct-result-actions",
+        type: "actions",
+        items: [
+          { id: "show-plan", label: "Run staged plan" },
+          { id: "show-timeline", label: "Run timeline" },
+          ...flowLabResultFollowUpActions
+        ]
       }
-    },
+    ]
+  });
+}
+
+function buildPlanSettlingScreen(requestId?: string): ScreenSchema {
+  return createTaskScreen(
     {
-      type: "append_blocks" as const,
+      id: "plan-finalizing",
+      title: "Generated task plan",
+      subtitle: "Finalizing workspace",
       blocks: [
         {
-          id: "list-1",
-          type: "list" as const,
-          items: [
-            { id: "a", title: "Capture voice input", description: "Hold-to-talk shell entry point." },
-            { id: "b", title: "Stream harness events", description: "Drive UI from protocol events." },
-            { id: "c", title: "Render blocks", description: "Translate schema into native components." },
-            { id: "d", title: "Bridge artifacts", description: "Return preview/open resources without breaking transport boundaries." }
-          ]
+          id: "plan-finalizing-text",
+          type: "text",
+          value: "The harness has assembled the plan and is now locking the final result surface."
         },
         {
-          id: "actions-2",
-          type: "actions" as const,
+          id: "plan-finalizing-card",
+          type: "card",
+          title: "Finalizing",
+          body: "Committing the last workspace blocks before the result surface is released."
+        }
+      ]
+    },
+    {
+      input: "locked",
+      actions: "locked",
+      forms: "locked",
+      reason: "The harness is finalizing the task plan."
+    },
+    createOngoingFlow(requestId)
+  );
+}
+
+function buildPlanResultScreen(): ScreenSchema {
+  return createResultScreen({
+    id: "plan-result",
+    title: "Generated task plan",
+    subtitle: "Result surface returned by the local harness",
+    blocks: [
+      {
+        id: "plan-intro",
+        type: "text",
+        value: "The harness has moved past the processing shell and is now building a task workspace."
+      },
+      {
+        id: "plan-status",
+        type: "card",
+        title: "Result stage",
+        body: "The harness incrementally patched the workspace into a final result surface."
+      },
+      {
+        id: "list-1",
+        type: "list",
+        items: [
+          { id: "a", title: "Capture voice input", description: "Hold-to-talk shell entry point." },
+          { id: "b", title: "Stream harness events", description: "Drive UI from protocol events." },
+          { id: "c", title: "Render blocks", description: "Translate schema into native components." },
+          { id: "d", title: "Bridge artifacts", description: "Return preview/open resources without breaking transport boundaries." }
+        ]
+      },
+      {
+        id: "actions-2",
+        type: "actions",
+        items: [
+          { id: "show-report", label: "Show report" },
+          { id: "preview-asset", label: "Preview artifact" },
+          ...flowLabResultFollowUpActions
+        ]
+      }
+    ]
+  });
+}
+
+function buildTimelineIntroScreen(requestId?: string): ScreenSchema {
+  return createTaskScreen(
+    {
+      id: "task-timeline",
+      title: "Task timeline",
+      subtitle: "Task workspace is streaming step progression",
+      blocks: [
+        {
+          id: "timeline-intro",
+          type: "text",
+          value: "The harness is publishing a constrained task timeline instead of a free-form text dump."
+        },
+        {
+          id: "timeline-block",
+          type: "timeline",
+          title: "Execution flow",
+          description: "This block is suited for agent work that moves through clear stages.",
           items: [
-            { id: "show-report", label: "Show report" },
-            { id: "preview-asset", label: "Preview artifact" },
-            { id: "back-home", label: "Back home" }
+            {
+              id: "timeline-step-capture",
+              title: "Capture intent",
+              description: "Voice or form input has been normalized into structured task context.",
+              status: "complete",
+              meta: "done"
+            },
+            {
+              id: "timeline-step-plan",
+              title: "Build plan",
+              description: "The harness is decomposing the request into executable workspace steps.",
+              status: "active",
+              meta: "in progress"
+            },
+            {
+              id: "timeline-step-artifacts",
+              title: "Prepare artifacts",
+              description: "Attach report surfaces and related resources once the plan stabilizes.",
+              status: "pending",
+              meta: "queued"
+            }
           ]
         }
       ]
     },
     {
-      type: "set_interaction" as const,
-      interaction: {
-        ...defaultScreenInteraction
-      }
-    }
-  ];
+      input: "locked",
+      actions: "locked",
+      forms: "locked",
+      reason: "The harness is still streaming task progression."
+    },
+    createOngoingFlow(requestId)
+  );
 }
 
-function buildTimelineIntroScreen(): ScreenSchema {
-  return createTaskScreen(
+function createLockedTimelineInteraction(reason: string) {
+  return {
+    input: "locked",
+    actions: "locked",
+    forms: "locked",
+    artifacts: "enabled",
+    history: "enabled",
+    reason
+  } as const;
+}
+
+function buildTimelineStreamingPatchOperations(): ScreenPatchOperation[] {
+  return [
     {
-    id: "task-timeline",
-    title: "Task timeline",
-    subtitle: "Streaming step progression",
-    blocks: [
-      {
-        id: "timeline-intro",
-        type: "text",
-        value: "The harness is publishing a constrained task timeline instead of a free-form text dump."
-      },
-      {
+      type: "set_subtitle",
+      subtitle: "Task workspace is receiving incremental timeline patches"
+    },
+    {
+      type: "upsert_block",
+      block: {
         id: "timeline-block",
         type: "timeline",
         title: "Execution flow",
-        description: "This block is suited for agent work that moves through clear stages.",
+        description: "The harness is patching the active task workspace instead of replacing the full screen.",
         items: [
           {
             id: "timeline-step-capture",
@@ -455,96 +1293,186 @@ function buildTimelineIntroScreen(): ScreenSchema {
           {
             id: "timeline-step-plan",
             title: "Build plan",
-            description: "The harness is decomposing the request into executable workspace steps.",
-            status: "active",
-            meta: "in progress"
+            description: "The harness has locked the execution shape and advanced to the patch stage.",
+            status: "complete",
+            meta: "done"
           },
           {
             id: "timeline-step-artifacts",
             title: "Prepare artifacts",
-            description: "Attach report surfaces and related resources once the plan stabilizes.",
+            description: "Resource links and follow-up surfaces are being attached through incremental updates.",
+            status: "active",
+            meta: "patching"
+          },
+          {
+            id: "timeline-step-verify",
+            title: "Verify request chain",
+            description: "Runtime history should now show multiple workspace updates for the same request.",
             status: "pending",
             meta: "queued"
           }
         ]
       }
-    ]
     },
     {
-      input: "locked",
-      actions: "locked",
-      forms: "locked",
-      reason: "The harness is still streaming task progression."
+      type: "append_blocks",
+      blocks: [
+        {
+          id: "timeline-patch-details",
+          type: "details",
+          title: "Patch checkpoint",
+          items: [
+            {
+              id: "timeline-patch-mode",
+              label: "Update mode",
+              value: "screen.patched"
+            },
+            {
+              id: "timeline-patch-scope",
+              label: "Scope",
+              value: "Subtitle, timeline block, and diagnostics"
+            },
+            {
+              id: "timeline-patch-request",
+              label: "Expectation",
+              value: "Same requestId should survive the full patched chain"
+            }
+          ]
+        }
+      ]
     }
-  );
+  ];
 }
 
-function buildTimelinePatchOperations(): ScreenPatchOperation[] {
+function buildTimelineFinalizingPatchOperations(): ScreenPatchOperation[] {
   return [
     {
-      type: "set_subtitle" as const,
-      subtitle: "Returned by the local harness with incremental timeline updates"
+      type: "set_subtitle",
+      subtitle: "Finalizing patched timeline surface"
     },
     {
-      type: "upsert_block" as const,
+      type: "set_interaction",
+      interaction: createLockedTimelineInteraction("The harness is finalizing the patched task timeline.")
+    },
+    {
+      type: "upsert_block",
       block: {
         id: "timeline-block",
-        type: "timeline" as const,
+        type: "timeline",
         title: "Execution flow",
-        description: "The harness patched stage progress without replacing the entire workspace.",
+        description: "The active task workspace has been patched twice and is now being sealed for release.",
         items: [
           {
             id: "timeline-step-capture",
             title: "Capture intent",
             description: "Voice or form input has been normalized into structured task context.",
-            status: "complete" as const,
+            status: "complete",
+            meta: "done"
+          },
+          {
+            id: "timeline-step-plan",
+            title: "Build plan",
+            description: "The task shape is fixed and no longer changing.",
+            status: "complete",
+            meta: "done"
+          },
+          {
+            id: "timeline-step-artifacts",
+            title: "Prepare artifacts",
+            description: "Artifact attachment has been stabilized and is ready for result release.",
+            status: "complete",
+            meta: "done"
+          },
+          {
+            id: "timeline-step-verify",
+            title: "Verify request chain",
+            description: "Diagnostics are pinned so the result screen can be released next.",
+            status: "active",
+            meta: "finalizing"
+          }
+        ]
+      }
+    },
+    {
+      type: "upsert_block",
+      block: {
+        id: "timeline-finalizing-card",
+        type: "card",
+        title: "Finalizing",
+        body: "The harness is sealing the patched workspace before releasing the final result screen."
+      }
+    }
+  ];
+}
+
+function buildTimelineResultScreen(): ScreenSchema {
+  return createResultScreen({
+    id: "timeline-result",
+    title: "Task timeline",
+    subtitle: "Result surface returned with incremental timeline updates",
+    blocks: [
+      {
+        id: "timeline-intro",
+        type: "text",
+        value: "The harness is publishing a constrained task timeline instead of a free-form text dump."
+      },
+      {
+        id: "timeline-block",
+        type: "timeline",
+        title: "Execution flow",
+        description: "The harness advanced this request through task-state patches before releasing the final result.",
+        items: [
+          {
+            id: "timeline-step-capture",
+            title: "Capture intent",
+            description: "Voice or form input has been normalized into structured task context.",
+            status: "complete",
             meta: "done"
           },
           {
             id: "timeline-step-plan",
             title: "Build plan",
             description: "The harness decomposed the request into actionable workspace stages.",
-            status: "complete" as const,
+            status: "complete",
             meta: "done"
           },
           {
             id: "timeline-step-artifacts",
             title: "Prepare artifacts",
-            description: "Report surfaces and resource links were attached to the next workspace.",
-            status: "active" as const,
-            meta: "streaming"
+            description: "Report surfaces and resource links were attached during the patched task phase.",
+            status: "complete",
+            meta: "done"
           },
           {
-            id: "timeline-step-wait",
-            title: "Wait for follow-up",
-            description: "The runtime is now ready for another action or voice request.",
-            status: "pending" as const,
-            meta: "next"
+            id: "timeline-step-verify",
+            title: "Verify request chain",
+            description: "Runtime diagnostics should show one requestId with multiple workspace patch events.",
+            status: "complete",
+            meta: "done"
           }
         ]
+      },
+      {
+        id: "timeline-result-details",
+        type: "details",
+        title: "Patch summary",
+        items: [
+          { id: "timeline-result-path", label: "Path", value: "processing -> task.updated -> task.patched -> result" },
+          { id: "timeline-result-request", label: "Request continuity", value: "One requestId across screen.updated and screen.patched events" },
+          { id: "timeline-result-debug", label: "Best check", value: "Open Verification board or Runtime playground" }
+        ]
+      },
+      {
+        id: "timeline-actions",
+        type: "actions",
+        items: [
+          { id: "show-report", label: "Show report" },
+          { id: "preview-asset", label: "Preview artifact" },
+          ...flowLabResultFollowUpActions
+        ]
       }
-    },
-    {
-      type: "append_blocks" as const,
-      blocks: [
-        {
-          id: "timeline-actions",
-          type: "actions" as const,
-          items: [
-            { id: "show-report", label: "Show report" },
-            { id: "preview-asset", label: "Preview artifact" },
-            { id: "back-home", label: "Back home" }
-          ]
-        }
-      ]
-    },
-    {
-      type: "set_interaction" as const,
-      interaction: {
-        ...defaultScreenInteraction
-      }
-    }
-  ];
+    ]
+  });
 }
 
 function buildTaskBriefScreen(): ScreenSchema {
@@ -885,6 +1813,7 @@ function buildEventLogScreen(): ScreenSchema {
         id: "event-log-actions",
         type: "actions",
         items: [
+          { id: "show-playground", label: "Inspect runtime" },
           { id: "show-timeline", label: "Open timeline" },
           { id: "back-home", label: "Back home" }
         ]
@@ -1112,14 +2041,16 @@ function buildFormScreen(): ScreenSchema {
             id: "goal",
             kind: "text",
             label: "Primary goal",
-            placeholder: "Ship the next runtime milestone",
+            defaultValue: "Ship the next runtime milestone",
+            placeholder: "Describe the primary goal",
             required: true
           },
           {
             id: "duration",
             kind: "text",
             label: "Available time",
-            placeholder: "90 minutes",
+            defaultValue: "90 minutes",
+            placeholder: "Enter the available time",
             required: true
           },
           {
@@ -1127,7 +2058,8 @@ function buildFormScreen(): ScreenSchema {
             kind: "multiline",
             label: "Constraints",
             description: "Optional notes the harness should consider before building the next workspace.",
-            placeholder: "Need a quiet block, avoid meetings, include one review pass."
+            defaultValue: "Need a quiet block, avoid meetings, include one review pass.",
+            placeholder: "Add any extra constraints"
           }
         ]
       },
@@ -1138,6 +2070,66 @@ function buildFormScreen(): ScreenSchema {
       }
     ]
   });
+}
+
+function buildFormProcessingScreen(values: Record<string, string>, requestId?: string): ScreenSchema {
+  return createProcessingScreen(
+    {
+      id: "form-processing",
+      title: "Task intake form",
+      subtitle: "Processing submitted fields",
+      blocks: [
+        {
+          id: "form-processing-text",
+          type: "text",
+          value: "The harness is validating the submitted fields before building the next result surface."
+        },
+        {
+          id: "form-processing-card",
+          type: "card",
+          title: values.goal || "Submitted goal",
+          body: `Preparing the next step from ${values.duration || "the provided"} time window.`
+        }
+      ]
+    },
+    {
+      input: "locked",
+      actions: "locked",
+      forms: "locked",
+      reason: "The harness is processing the submitted form."
+    },
+    createOngoingFlow(requestId)
+  );
+}
+
+function buildFormSettlingScreen(values: Record<string, string>, requestId?: string): ScreenSchema {
+  return createTaskScreen(
+    {
+      id: "form-finalizing",
+      title: "Task intake form",
+      subtitle: "Finalizing submitted fields",
+      blocks: [
+        {
+          id: "form-finalizing-text",
+          type: "text",
+          value: "The harness has validated the structured fields and is packaging the final result surface."
+        },
+        {
+          id: "form-finalizing-card",
+          type: "card",
+          title: values.goal || "Submitted goal",
+          body: `Locking the final summary for ${values.duration || "the provided"} time window.`
+        }
+      ]
+    },
+    {
+      input: "locked",
+      actions: "locked",
+      forms: "locked",
+      reason: "The harness is finalizing the submitted form."
+    },
+    createOngoingFlow(requestId)
+  );
 }
 
 function buildFormResultScreen(values: Record<string, string>): ScreenSchema {
@@ -1205,7 +2197,7 @@ function buildFormResultScreen(values: Record<string, string>): ScreenSchema {
         type: "actions",
         items: [
           { id: "show-plan", label: "Build plan" },
-          { id: "back-home", label: "Back home" }
+          ...flowLabResultFollowUpActions
         ]
       }
     ]
@@ -1226,7 +2218,7 @@ function buildResourceScreen(resource: ArtifactRef, subtitle: string): ScreenSch
       {
         id: `resource-actions-${resource.id}`,
         type: "actions",
-        items: [{ id: "back-home", label: "Back home" }]
+        items: [...runtimeInspectActions]
       }
     ]
   });
@@ -1260,7 +2252,7 @@ function buildCapabilityResultScreenWithPayload(
       {
         id: "capability-actions",
         type: "actions",
-        items: [{ id: "back-home", label: "Back home" }]
+        items: [...flowLabResultFollowUpActions]
       }
     ]
   });
@@ -1300,104 +2292,183 @@ function createDemoLocalHarness() {
     return actionId === "show-plan" || actionId === "show-timeline";
   }
 
-  function emitResolvedScreen(screen: ScreenSchema, emit: DemoEmit) {
-    emit({ type: "screen.updated", screen });
+  function isProcessingScenario(actionId: string) {
+    return isTaskScenario(actionId) || actionId === "show-direct";
+  }
+
+  function emitRootScreen(screen: ScreenSchema, emit: DemoEmit) {
+    emit({ type: "screen.updated", screen: applyFlow(screen, createRootFlow()) });
     emit({ type: "status", phase: "waiting" });
   }
 
-  async function runTaskScenario(actionId: string, emit: DemoEmit) {
+  function emitResolvedScreen(screen: ScreenSchema, emit: DemoEmit, requestId?: string) {
+    emit({
+      type: "screen.updated",
+      screen: requestId ? applyFlow(screen, createCompletedFlow(requestId)) : screen
+    });
+    emit({ type: "status", phase: "waiting" });
+  }
+
+  async function runTaskScenario(actionId: string, emit: DemoEmit, requestId?: string) {
     if (actionId === "show-plan") {
-      const scaffold = buildPlanScaffoldScreen();
-      emit({ type: "screen.updated", screen: scaffold });
-      await delay(340);
       emit({
-        type: "screen.patched",
-        screenId: scaffold.id,
-        operations: buildPlanPatchOperations()
+        type: "screen.updated",
+        screen: buildProcessingStageScreen(
+          "plan-processing",
+          "Generated task plan",
+          "Processing request",
+          "The harness is analyzing the request before opening a task workspace.",
+          requestId
+        )
       });
-      emit({ type: "status", phase: "waiting" });
+      await delay(220);
+      const scaffold = buildPlanScaffoldScreen(requestId);
+      emit({ type: "screen.updated", screen: scaffold });
+      await delay(360);
+      emit({ type: "screen.updated", screen: buildPlanSettlingScreen(requestId) });
+      await delay(760);
+      emitResolvedScreen(buildPlanResultScreen(), emit, requestId);
       return;
     }
 
     if (actionId === "show-timeline") {
-      const scaffold = buildTimelineIntroScreen();
-      emit({ type: "screen.updated", screen: scaffold });
-      await delay(340);
+      emit({
+        type: "screen.updated",
+        screen: buildProcessingStageScreen(
+          "timeline-processing",
+          "Task timeline",
+          "Processing request",
+          "The harness is organizing execution stages before opening the task timeline.",
+          requestId
+        )
+      });
+      await delay(220);
+      const timelineScreen = buildTimelineIntroScreen(requestId);
+      emit({ type: "screen.updated", screen: timelineScreen });
+      await delay(360);
       emit({
         type: "screen.patched",
-        screenId: scaffold.id,
-        operations: buildTimelinePatchOperations()
+        screenId: timelineScreen.id,
+        operations: buildTimelineStreamingPatchOperations()
       });
-      emit({ type: "status", phase: "waiting" });
+      await delay(360);
+      emit({
+        type: "screen.patched",
+        screenId: timelineScreen.id,
+        operations: buildTimelineFinalizingPatchOperations()
+      });
+      await delay(520);
+      emitResolvedScreen(buildTimelineResultScreen(), emit, requestId);
     }
   }
 
-  async function runLocalAction(actionId: string, emit: DemoEmit) {
+  async function runDirectResultScenario(emit: DemoEmit, requestId?: string) {
+    emit({
+      type: "screen.updated",
+      screen: buildProcessingStageScreen(
+        "direct-processing",
+        "Direct result surface",
+        "Processing request",
+        "The harness is resolving the request and will return a final result without opening an intermediate task workspace.",
+        requestId
+      )
+    });
+    await delay(320);
+    emitResolvedScreen(buildDirectResultScreen(), emit, requestId);
+  }
+
+  async function runLocalAction(actionId: string, emit: DemoEmit, requestId?: string) {
     if (isTaskScenario(actionId)) {
-      await runTaskScenario(actionId, emit);
+      await runTaskScenario(actionId, emit, requestId);
+      return;
+    }
+
+    if (actionId === "show-direct") {
+      await runDirectResultScenario(emit, requestId);
+      return;
+    }
+
+    if (actionId === "show-flow-lab") {
+      emitResolvedScreen(buildFlowLabScreen(), emit, requestId);
+      return;
+    }
+
+    if (actionId === "show-verification") {
+      emitResolvedScreen(buildVerificationBoardScreen(), emit, requestId);
+      return;
+    }
+
+    if (actionId === "show-playground") {
+      emitResolvedScreen(buildRuntimePlaygroundScreen(), emit, requestId);
       return;
     }
 
     if (actionId === "show-brief") {
-      emitResolvedScreen(buildTaskBriefScreen(), emit);
+      emitResolvedScreen(buildTaskBriefScreen(), emit, requestId);
       return;
     }
 
     if (actionId === "show-day-planner") {
-      emitResolvedScreen(buildDayPlannerScreen(), emit);
+      emitResolvedScreen(buildDayPlannerScreen(), emit, requestId);
       return;
     }
 
     if (actionId === "show-grocery") {
-      emitResolvedScreen(buildGroceryRunScreen(), emit);
+      emitResolvedScreen(buildGroceryRunScreen(), emit, requestId);
       return;
     }
 
     if (actionId === "show-trip") {
-      emitResolvedScreen(buildTravelCompanionScreen(), emit);
+      emitResolvedScreen(buildTravelCompanionScreen(), emit, requestId);
       return;
     }
 
     if (actionId === "show-wellness") {
-      emitResolvedScreen(buildWellnessCheckInScreen(), emit);
+      emitResolvedScreen(buildWellnessCheckInScreen(), emit, requestId);
       return;
     }
 
     if (actionId === "show-log") {
-      emitResolvedScreen(buildEventLogScreen(), emit);
+      emitResolvedScreen(buildEventLogScreen(), emit, requestId);
       return;
     }
 
     if (actionId === "show-workspace") {
-      emitResolvedScreen(buildGroupedWorkspaceScreen(), emit);
+      emitResolvedScreen(buildGroupedWorkspaceScreen(), emit, requestId);
       return;
     }
 
     if (actionId === "show-split") {
-      emitResolvedScreen(buildSplitWorkspaceScreen(), emit);
+      emitResolvedScreen(buildSplitWorkspaceScreen(), emit, requestId);
       return;
     }
 
     if (actionId === "show-form") {
-      emitResolvedScreen(buildFormScreen(), emit);
+      emitResolvedScreen(buildFormScreen(), emit, requestId);
       return;
     }
 
     if (actionId === "show-ops-board") {
-      emitResolvedScreen(buildOpsBoardScreen(), emit);
+      emitResolvedScreen(buildOpsBoardScreen(), emit, requestId);
       return;
     }
 
     if (actionId === "preview-asset") {
-      emitResolvedScreen(buildResourceScreen(linkedArtifact, "Resource block wired through the protocol"), emit);
+      emitResolvedScreen(buildResourceScreen(linkedArtifact, "Resource block wired through the protocol"), emit, requestId);
       return;
     }
 
     if (actionId === "show-report") {
       emitResolvedScreen(
         buildResourceScreen(reportArtifact, "HTML artifact sent through the same schema surface"),
-        emit
+        emit,
+        requestId
       );
+      return;
+    }
+
+    if (actionId === "show-pdf") {
+      emitResolvedScreen(buildResourceScreen(pdfArtifact, "PDF artifact sent through the same schema surface"), emit, requestId);
       return;
     }
 
@@ -1405,9 +2476,42 @@ function createDemoLocalHarness() {
       emit({
         type: "capability.requested",
         request: {
-          id: "cap_microphone_demo",
+          id: requestId ?? "cap_microphone_demo",
           capability: "microphone",
           reason: "The local harness wants to demonstrate the capability bridge flow."
+        }
+      });
+      return;
+    }
+
+    if (actionId === "request-open-url") {
+      emit({
+        type: "capability.requested",
+        request: {
+          id: requestId ?? "cap_open_url_demo",
+          capability: "open-url",
+          reason: "The local harness wants to open a linked surface through the default renderer bridge.",
+          payload: {
+            title: "Unstable UI repository",
+            url: "https://github.com/SelfMeAI/unstable-ui"
+          }
+        }
+      });
+      return;
+    }
+
+    if (actionId === "request-share") {
+      emit({
+        type: "capability.requested",
+        request: {
+          id: requestId ?? "cap_share_demo",
+          capability: "share",
+          reason: "The local harness wants to forward a generated summary into the native share sheet.",
+          payload: {
+            title: "Share runtime summary",
+            message: "Unstable UI is ready for the next runtime iteration.",
+            url: "https://github.com/SelfMeAI/unstable-ui"
+          }
         }
       });
       return;
@@ -1423,18 +2527,18 @@ function createDemoLocalHarness() {
 
     if (actionId === "set-input-flow-sequence") {
       inputFlowMode = "sequence";
-      emitResolvedScreen(buildLocalHomeScreen(), emit);
+      emitRootScreen(buildLocalHomeScreen(), emit);
       return;
     }
 
     if (actionId === "set-input-flow-random") {
       inputFlowMode = "random";
-      emitResolvedScreen(buildLocalHomeScreen(), emit);
+      emitRootScreen(buildLocalHomeScreen(), emit);
       return;
     }
 
     if (actionId === "back-home") {
-      emitResolvedScreen(buildLocalHomeScreen(), emit);
+      emitRootScreen(buildLocalHomeScreen(), emit);
     }
   }
 
@@ -1455,7 +2559,7 @@ function createDemoLocalHarness() {
         await delay(280);
         emit({ type: "status", phase: "running" });
         await delay(180);
-        await runLocalAction(nextScenario.id, emit);
+        await runLocalAction(nextScenario.id, emit, event.clientRequestId);
         return;
       }
 
@@ -1477,19 +2581,26 @@ function createDemoLocalHarness() {
             event.payload?.granted as boolean | undefined,
             event.payload
           ),
-          emit
+          emit,
+          event.requestId
         );
         return;
       }
 
       if (event.type === "form.submitted") {
-        emit({ type: "status", phase: "running" });
-        await delay(180);
+        emit({ type: "status", phase: "thinking" });
         emit({
           type: "screen.updated",
-          screen: buildFormResultScreen(event.values)
+          screen: buildFormProcessingScreen(event.values, event.clientRequestId)
         });
-        emit({ type: "status", phase: "waiting" });
+        await delay(220);
+        emit({ type: "status", phase: "running" });
+        emit({
+          type: "screen.updated",
+          screen: buildFormSettlingScreen(event.values, event.clientRequestId)
+        });
+        await delay(760);
+        emitResolvedScreen(buildFormResultScreen(event.values), emit, event.clientRequestId);
         return;
       }
 
@@ -1497,13 +2608,13 @@ function createDemoLocalHarness() {
         return;
       }
 
-      if (isTaskScenario(event.actionId)) {
+      if (isProcessingScenario(event.actionId)) {
         emit({ type: "status", phase: "thinking" });
         await delay(180);
         emit({ type: "status", phase: "running" });
       }
 
-      await runLocalAction(event.actionId, emit);
+      await runLocalAction(event.actionId, emit, event.clientRequestId);
     }
   });
 }
@@ -1524,14 +2635,41 @@ const harness = remoteHarnessBaseUrl
   : createDemoLocalHarness();
 
 export default function App() {
+  const {
+    transitionHooks,
+    transitionState,
+    runtimeStageStyle,
+    blockRuntimePointerEvents
+  } = useDemoScreenTransition();
+
   return (
-    <AgentRuntimeView
-      harness={harness}
-      artifactHandlers={demoArtifactHandlers}
-      capabilityHandlers={demoCapabilityHandlers}
-      runtimeOptions={{
-        persistence: demoRuntimePersistence
-      }}
-    />
+    <View style={styles.appRoot}>
+      <Animated.View
+        pointerEvents={blockRuntimePointerEvents ? "none" : "auto"}
+        style={[styles.runtimeStage, runtimeStageStyle]}
+      >
+        <AgentRuntimeView
+          harness={harness}
+          voiceShell={demoVoiceShell}
+          artifactHandlers={demoArtifactHandlers}
+          capabilityHandlers={demoCapabilityHandlers}
+          transitionHooks={transitionHooks}
+          runtimeOptions={{
+            persistence: demoRuntimePersistence
+          }}
+        />
+      </Animated.View>
+      <DemoTransitionOverlay state={transitionState} />
+    </View>
   );
 }
+
+const styles = StyleSheet.create({
+  appRoot: {
+    flex: 1,
+    backgroundColor: "#F3F6FB"
+  },
+  runtimeStage: {
+    flex: 1
+  }
+});

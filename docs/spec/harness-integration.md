@@ -24,13 +24,69 @@ The framework is responsible for runtime state, schema rendering, artifact handl
 3. Validate block schema, action round-trips, and artifact handling in the demo app.
 4. Move to a remote harness after the event flow is stable.
 
+## Recommended Remote Flow Shape
+
+For remote harnesses, the current recommended baseline is an explicit screen lifecycle:
+
+1. Emit a `status` event such as `thinking` or `running`.
+2. Emit a `screen.updated` event with `screen.mode = "processing"` and a shared `screen.flow.requestId`.
+3. If the request needs an intermediate workspace, emit a `screen.updated` event with `screen.mode = "task"` and the same `screen.flow.requestId`.
+4. If the harness needs a final sealing stage, emit one more `processing` or `task` screen with the same request id.
+5. Emit the final `screen.updated` event with `screen.mode = "result"` and `screen.flow.state = "complete"`.
+6. Return runtime interaction to normal by unlocking the screen and sending `status = "waiting"`.
+
+This keeps remote, local, and hybrid harnesses aligned on one page-flow model. It also gives the animation layer a stable set of transition hooks later, instead of forcing animation to infer intent from arbitrary screen swaps.
+
+It also means the runtime can group `history` entries by request instead of treating every input, task page, result page, and artifact handoff as unrelated rows.
+
+## Flow Metadata
+
+Use `screen.flow` whenever a screen belongs to an in-flight request:
+
+- `requestId`
+  Use the incoming `clientRequestId` when available so the runtime can associate multiple screens with one user action.
+
+- `state`
+  Use `ongoing` for processing or task surfaces, then `complete` for the final result surface.
+
+- `transition`
+  Use `replace` for staged pages inside a request. Use `root` only when resetting to a new top-level surface such as the home workspace.
+
+If the harness keeps one workspace alive while it advances internal steps, prefer `screen.patched` over full replacement so the runtime can measure real incremental progress instead of only final page swaps.
+
+## Harness SDK Helpers
+
+The harness SDK now exports screen helpers for the most common page-flow cases:
+
+- `createStableScreen`
+- `createProcessingScreen`
+- `createTaskScreen`
+- `createResultScreen`
+- `createRootScreenFlow`
+- `createOngoingScreenFlow`
+- `createCompletedScreenFlow`
+- `applyScreenFlow`
+
+Use them when you want the harness implementation to stay focused on content instead of hand-assembling `mode`, `flow`, and `interaction` objects for each screen.
+
 ## Demo References
 
 - `apps/demo-expo`
-  Shows the local harness path and the default runtime shell.
+  Shows the local harness path, the default runtime shell, a `Flow lab` surface for baseline page-flow testing, a `Runtime playground` surface for embedded history/event-log inspection, and a `Verification board` surface for request-level checks.
 
 - `apps/demo-harness`
-  Shows a minimal remote HTTP + SSE harness server.
+  Shows a minimal remote HTTP + SSE harness server with staged task, direct-result, form, and patched timeline flows plus the same `Runtime playground` and `Verification board` surfaces.
+
+## Verification Surfaces
+
+The runtime now exposes a verification layer that harness authors can use while stabilizing flows:
+
+- request-aware history grouped by `screen.flow.requestId`
+- active and last-completed request snapshots
+- request metrics for history, workspace, patch, resource, and issue counts
+- derived assertions, matrix rows, and a top-level verdict
+
+These are runtime projections. A harness does not need to emit extra verification events to benefit from them.
 
 ## Notes
 
@@ -38,10 +94,30 @@ The current React Native track is optimized for a minimal but real integration l
 
 - fixed input shell with voice / text switching
 - workspace-first surface with a separate session history entry
+- request-aware history entries tied back to the active `screen.flow.requestId`
+- request-aware verification views for the active and last completed request
 - schema-driven screen rendering
 - action round-trip
 - structured form round-trip
-- minimal artifact preview/open behavior
+- explicit `processing -> result` and `processing -> task -> finalizing -> result` remote page flows
+- real `screen.patched` progression for incremental workspace updates
+- minimal artifact preview/open/share/download behavior
 - minimal capability request / resolve flow
+
+The default renderer now includes built-in bridge behavior for:
+
+- artifact `share`
+- artifact `download`
+- capability `open-url`
+- capability `share`
+
+So a host app does not need a custom handler just to demo those common system actions.
+
+The renderer now also honors `interaction.history`. If a harness or host locks history for a screen, the fixed `History` entry becomes unavailable until that lock is released.
+
+The default renderer also supports a middle path for input-shell integration:
+
+- pass `voiceShell` when you want to keep the built-in floating shell but adjust copy, default mode, and recent-input behavior
+- pass `renderVoiceShell` only when the host app needs to replace the bottom shell UI completely
 
 It is intended as a starter integration surface, not yet a full production integration kit.

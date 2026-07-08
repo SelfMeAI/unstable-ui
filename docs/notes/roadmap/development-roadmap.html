@@ -40,6 +40,12 @@
             <li>增加内建 split block，让工作区具备主次 pane 布局能力。</li>
             <li>增加 session history 记录，并在 renderer 顶部提供固定 History 入口。</li>
             <li>把底部输入壳扩展为 voice / text 双模式快速切换。</li>
+            <li>在 renderer 暴露页面过渡钩子，为后续动画系统提供正式挂点。</li>
+            <li>在 demo 中接入基于 transition hooks 的全屏过渡控制器，先把 processing / settling 链路跑通。</li>
+            <li>把远端 harness 示例收敛到明确的 processing / task / finalizing / result 页面流。</li>
+            <li>把 screen flow helper 提炼进 harness-sdk，减少接入方手拼 lifecycle 字段。</li>
+            <li>把 runtime 的 request-aware history、request metrics 和 Verification board 主干补齐。</li>
+            <li>让 timeline 流真正走 <code class="inline">screen.patched</code> 增量更新，验证 patched request 的运行语义。</li>
           </ul>
         </section>
 
@@ -51,6 +57,7 @@
           <ol>
             <li>先补 <strong>screen lifecycle</strong> 语义，明确 idle、processing、task、result、approval、error 这些页面角色。</li>
             <li>再补 <strong>runtime flow controller</strong>，明确当前 screen 是替换、临时过渡、任务中间态还是最终结果态。</li>
+            <li>在 renderer 层固定 transition hooks，让动画系统只消费过渡事件，不再反向侵入 runtime 语义。</li>
             <li>把 demo harness 收敛成几条标准流程，而不是继续堆随机页面。</li>
             <li>等页面流、输入锁和历史记录都稳定后，再重新设计动画系统。</li>
           </ol>
@@ -64,26 +71,27 @@
           <ol>
             <li>把固定 <strong>input shell</strong> 与页面流真正绑定起来，形成稳定的提交、锁定、解锁闭环。</li>
             <li>把 <strong>history</strong> 从附属能力提升为正式会话入口，保证能回看输入、任务页、结果页和错误页。</li>
+            <li>继续把 history 做成 <strong>request-aware</strong>，并补上 current / completed request 级别的验证视图。</li>
             <li>增强 <strong>artifact bridge</strong>：从当前最小 preview/open 扩展到更真实的资源预览行为。</li>
             <li>增强 <strong>capability bridge</strong>：从当前最小 mock 流扩展到真实设备权限和系统能力桥接。</li>
-            <li>把 renderer 的状态显示、空态、错误态和 processing 态呈现再做完整一点。</li>
+            <li>把 renderer 的状态显示、空态、错误态、processing 态和 verification 呈现再做完整一点。</li>
           </ol>
         </section>
 
         <section class="section">
           <h2>4. 阶段二：把接入面补齐</h2>
           <ol>
-            <li>实现 <strong>remote harness</strong> 官方示例。</li>
-            <li>定义推荐的 HTTP / SSE 接入形态。</li>
+            <li>把 <strong>remote harness</strong> 官方示例继续从 demo 提炼成更稳的对外接入范式。</li>
+            <li>固化推荐的 HTTP / SSE 页面流约定与 requestId 传递方式。</li>
             <li>补本地 mock / playground，便于协议调试。</li>
-            <li>把 block 扩到下一组常用集合，例如 form、sheet、timeline。</li>
+            <li>继续扩 block 集合，但优先顺序要服从页面流和接入稳定性。</li>
           </ol>
         </section>
 
         <section class="section">
           <h2>5. 阶段三：增强稳定性与可扩展性</h2>
           <ol>
-            <li>支持 streaming patch，而不只是整屏更新。</li>
+            <li>把 streaming patch 从 demo 级验证推进到更稳定的正式接入能力。</li>
             <li>继续增强会话恢复、本地缓存、event log 和 history 查询能力。</li>
             <li>把 artifact preview 做成可扩展注册机制。</li>
             <li>整理更正式的对外接入文档和示例仓库。</li>
@@ -93,10 +101,10 @@
         <section class="section">
           <h2>6. 标准任务流样例</h2>
           <ul>
-            <li>语音输入 - processing - task page - result。</li>
+            <li>语音输入 - processing - task page - finalizing - result。</li>
             <li>语音输入 - processing - direct result。</li>
             <li>action.triggered - approval - result。</li>
-            <li>form.submitted - processing - result。</li>
+            <li>form.submitted - processing - finalizing - result。</li>
           </ul>
           <p>
             这几条流程后面会作为 runtime、renderer、demo harness 和动画系统的共同基线。

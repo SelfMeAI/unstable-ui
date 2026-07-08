@@ -19,7 +19,7 @@ export interface CoreBlockProps {
   block: Block;
   onAction(action: ActionItem): void;
   onFormSubmit(formId: string, values: Record<string, string>): void;
-  onArtifact(resource: ArtifactRef, mode: "preview" | "open"): void;
+  onArtifact(resource: ArtifactRef, mode: "preview" | "open" | "share" | "download"): void;
   interaction?: {
     actionsDisabled?: boolean;
     formsDisabled?: boolean;
@@ -116,10 +116,36 @@ export function CoreBlock({ block, onAction, onFormSubmit, onArtifact, interacti
                 <Text style={styles.secondaryActionText}>Open</Text>
               </Pressable>
             ) : null}
+            {canShareResource(block.resource) ? (
+              <Pressable
+                disabled={interaction?.artifactsDisabled}
+                onPress={() => onArtifact(block.resource, "share")}
+                style={[styles.secondaryActionButton, interaction?.artifactsDisabled ? styles.controlDisabled : null]}
+              >
+                <Text style={styles.secondaryActionText}>Share</Text>
+              </Pressable>
+            ) : null}
+            {canDownloadResource(block.resource) ? (
+              <Pressable
+                disabled={interaction?.artifactsDisabled}
+                onPress={() => onArtifact(block.resource, "download")}
+                style={[styles.secondaryActionButton, interaction?.artifactsDisabled ? styles.controlDisabled : null]}
+              >
+                <Text style={styles.secondaryActionText}>Download</Text>
+              </Pressable>
+            ) : null}
           </View>
         </View>
       );
   }
+}
+
+function canShareResource(resource: ArtifactRef) {
+  return Boolean(resource.uri);
+}
+
+function canDownloadResource(resource: ArtifactRef) {
+  return Boolean(resource.uri) && resource.kind !== "link" && resource.kind !== "html";
 }
 
 function buildFormValues(block: FormBlock) {
@@ -226,7 +252,7 @@ function SectionCard({
   block: SectionBlock;
   onAction(action: ActionItem): void;
   onFormSubmit(formId: string, values: Record<string, string>): void;
-  onArtifact(resource: ArtifactRef, mode: "preview" | "open"): void;
+  onArtifact(resource: ArtifactRef, mode: "preview" | "open" | "share" | "download"): void;
   interaction?: CoreBlockProps["interaction"];
 }) {
   return (
@@ -275,7 +301,7 @@ function SplitCard({
   block: SplitBlock;
   onAction(action: ActionItem): void;
   onFormSubmit(formId: string, values: Record<string, string>): void;
-  onArtifact(resource: ArtifactRef, mode: "preview" | "open"): void;
+  onArtifact(resource: ArtifactRef, mode: "preview" | "open" | "share" | "download"): void;
   interaction?: CoreBlockProps["interaction"];
 }) {
   const { width } = useWindowDimensions();
@@ -354,12 +380,14 @@ function getDetailTone(item: DetailItem) {
 }
 
 function DetailsCard({ block }: { block: DetailsBlock }) {
+  const items = block.items ?? [];
+
   return (
     <View style={styles.card}>
       {block.title ? <Text style={styles.cardTitle}>{block.title}</Text> : null}
       {block.description ? <Text style={styles.cardBody}>{block.description}</Text> : null}
       <View style={styles.detailsStack}>
-        {block.items.map((item) => {
+        {items.map((item) => {
           const tone = getDetailTone(item);
 
           return (

@@ -25,6 +25,17 @@ const reportArtifact = {
   openable: true
 };
 
+const pdfArtifact = {
+  id: "pdf-1",
+  kind: "pdf",
+  uri: "https://www.w3.org/WAI/ER/tests/xhtml/testfiles/resources/pdf/dummy.pdf",
+  source: "remote",
+  title: "Sample PDF artifact",
+  mimeType: "application/pdf",
+  previewable: true,
+  openable: true
+};
+
 const defaultScreenInteraction = {
   input: "enabled",
   actions: "enabled",
@@ -33,10 +44,36 @@ const defaultScreenInteraction = {
   history: "enabled"
 };
 
-function withScreenState(screen, mode, interaction = {}) {
+function createRootFlow() {
+  return {
+    transition: "root",
+    state: "complete"
+  };
+}
+
+function createOngoingFlow(requestId, parentRequestId) {
+  return {
+    requestId,
+    parentRequestId,
+    transition: "replace",
+    state: "ongoing"
+  };
+}
+
+function createCompletedFlow(requestId, parentRequestId) {
+  return {
+    requestId,
+    parentRequestId,
+    transition: "replace",
+    state: "complete"
+  };
+}
+
+function withScreenState(screen, mode, interaction = {}, flow = createRootFlow()) {
   return {
     ...screen,
     mode,
+    flow,
     interaction: {
       ...defaultScreenInteraction,
       ...interaction
@@ -44,16 +81,27 @@ function withScreenState(screen, mode, interaction = {}) {
   };
 }
 
-function createStableScreen(screen, interaction = {}) {
-  return withScreenState(screen, "stable", interaction);
+function applyFlow(screen, flow) {
+  return {
+    ...screen,
+    flow
+  };
 }
 
-function createTaskScreen(screen, interaction = {}) {
-  return withScreenState(screen, "task", interaction);
+function createStableScreen(screen, interaction = {}, flow = createRootFlow()) {
+  return withScreenState(screen, "stable", interaction, flow);
 }
 
-function createResultScreen(screen, interaction = {}) {
-  return withScreenState(screen, "result", interaction);
+function createProcessingScreen(screen, interaction = {}, flow = createOngoingFlow()) {
+  return withScreenState(screen, "processing", interaction, flow);
+}
+
+function createTaskScreen(screen, interaction = {}, flow = createOngoingFlow()) {
+  return withScreenState(screen, "task", interaction, flow);
+}
+
+function createResultScreen(screen, interaction = {}, flow = createCompletedFlow()) {
+  return withScreenState(screen, "result", interaction, flow);
 }
 
 function delay(ms) {
@@ -69,6 +117,8 @@ function json(res, statusCode, payload) {
 
 function getDemoArtifact(artifactId) {
   switch (artifactId) {
+    case pdfArtifact.id:
+      return pdfArtifact;
     case reportArtifact.id:
       return reportArtifact;
     case linkedArtifact.id:
@@ -90,6 +140,10 @@ const everydayScenarioActions = [
 ];
 
 const workspaceScenarioActions = [
+  { id: "show-flow-lab", label: "Flow lab" },
+  { id: "show-verification", label: "Verification board" },
+  { id: "show-playground", label: "Playground" },
+  { id: "show-direct", label: "Direct result" },
   { id: "show-plan", label: "Staged plan" },
   { id: "show-timeline", label: "Task timeline" },
   { id: "show-brief", label: "Task brief" },
@@ -103,11 +157,18 @@ const workspaceScenarioActions = [
 const systemScenarioActions = [
   { id: "preview-asset", label: "Link artifact" },
   { id: "show-report", label: "HTML report" },
+  { id: "show-pdf", label: "PDF artifact" },
   { id: "request-microphone", label: "Microphone bridge" },
+  { id: "request-open-url", label: "Open URL bridge" },
+  { id: "request-share", label: "Share bridge" },
   { id: "simulate-error", label: "Harness error" }
 ];
 
 const quickTestActions = [
+  { id: "show-flow-lab", label: "Open flow lab" },
+  { id: "show-verification", label: "Open verification" },
+  { id: "show-playground", label: "Open playground" },
+  { id: "show-direct", label: "Test direct result" },
   { id: "show-plan", label: "Test staged plan" },
   { id: "show-timeline", label: "Test timeline" },
   { id: "show-workspace", label: "Test workspace" },
@@ -118,7 +179,8 @@ const autoInputScenarioActions = [
   ...everydayScenarioActions,
   ...workspaceScenarioActions,
   { id: "preview-asset", label: "Link artifact" },
-  { id: "show-report", label: "HTML report" }
+  { id: "show-report", label: "HTML report" },
+  { id: "show-pdf", label: "PDF artifact" }
 ];
 
 function getInputFlowModeLabel(mode) {
@@ -226,100 +288,570 @@ function createHomeScreen(inputFlowMode = "sequence", scenarioCursor = 0) {
   });
 }
 
-function createPlanScaffoldScreen() {
-  return createTaskScreen(
+function createProcessingStageScreen(screenId, title, subtitle, body, requestId) {
+  return createProcessingScreen(
     {
-    id: "remote-plan",
-    title: "Generated task plan",
-    subtitle: "Streaming plan blocks",
+      id: screenId,
+      title,
+      subtitle,
+      blocks: [
+        {
+          id: `${screenId}-text`,
+          type: "text",
+          value: body
+        },
+        {
+          id: `${screenId}-card`,
+          type: "card",
+          title: "Processing",
+          body: "The harness is resolving the next workspace surface."
+        }
+      ]
+    },
+    {
+      input: "locked",
+      actions: "locked",
+      forms: "locked",
+      reason: "The harness is processing the current request."
+    },
+    createOngoingFlow(requestId)
+  );
+}
+
+function createFlowLabScreen() {
+  return createStableScreen({
+    id: "remote-flow-lab",
+    title: "Flow lab",
+    subtitle: "Manual test entry for standard runtime flows",
     blocks: [
       {
-        id: "plan-intro",
+        id: "flow-lab-intro",
         type: "text",
-        value: "The remote harness has started planning and is streaming the workspace in stages."
+        value: "Use this page to trigger the framework's baseline request flows without hunting through the remote home screen."
       },
       {
-        id: "plan-status",
-        type: "card",
-        title: "Plan stream",
-        body: "Collecting steps and preparing follow-up actions."
+        id: "flow-lab-summary",
+        type: "details",
+        title: "Current baseline",
+        items: [
+          { id: "flow-lab-task", label: "Task flow", value: "processing -> task -> finalizing -> result" },
+          { id: "flow-lab-direct", label: "Direct flow", value: "processing -> result" },
+          { id: "flow-lab-approval", label: "Approval flow", value: "approval -> result" },
+          { id: "flow-lab-form", label: "Form flow", value: "processing -> finalizing -> result" }
+        ]
+      },
+      {
+        id: "flow-lab-task-actions",
+        type: "actions",
+        items: [
+          { id: "show-direct", label: "Run direct result" },
+          { id: "show-plan", label: "Run staged plan" },
+          { id: "show-timeline", label: "Run timeline" },
+          { id: "show-form", label: "Open intake form" }
+        ]
+      },
+      {
+        id: "flow-lab-metrics",
+        type: "details",
+        title: "Metric hints",
+        items: [
+          { id: "flow-lab-metric-direct", label: "Direct flow", value: "Patch events should stay at 0" },
+          { id: "flow-lab-metric-timeline", label: "Timeline flow", value: "Patch events should be greater than 0" },
+          { id: "flow-lab-metric-task", label: "Task flows", value: "Workspace events should be greater than 1" },
+          { id: "flow-lab-metric-approval", label: "Approval flow", value: "Resource events should include at least one capability event" }
+        ]
+      },
+      {
+        id: "flow-lab-bridge-actions",
+        type: "actions",
+        items: [
+          { id: "request-microphone", label: "Test capability" },
+          { id: "request-open-url", label: "Test open URL" },
+          { id: "request-share", label: "Test share" },
+          { id: "preview-asset", label: "Test artifact" },
+          { id: "show-pdf", label: "Test download" },
+          { id: "simulate-error", label: "Test error" },
+          { id: "back-home", label: "Back home" }
+        ]
       }
     ]
+  });
+}
+
+function createRuntimePlaygroundScreen() {
+  return createStableScreen({
+    id: "remote-runtime-playground",
+    title: "Runtime playground",
+    subtitle: "Debug surface for flow, history, events, and bridge behavior",
+    blocks: [
+      {
+        id: "playground-session-details",
+        type: "details",
+        title: "Runtime session",
+        description: "Resolved directly from runtime.session.",
+        source: "runtime.session"
+      },
+      {
+        id: "playground-flow-details",
+        type: "details",
+        title: "Request flow",
+        description: "Resolved directly from runtime.flow.",
+        source: "runtime.flow"
+      },
+      {
+        id: "playground-current-request-details",
+        type: "details",
+        title: "Current request summary",
+        description: "Resolved from the active request-aware runtime state.",
+        source: "runtime.currentRequest"
+      },
+      {
+        id: "playground-last-completed-request-details",
+        type: "details",
+        title: "Last completed request",
+        description: "Resolved from runtime.flow.lastCompletedRequestId and the persisted history chain.",
+        source: "runtime.lastCompletedRequest"
+      },
+      {
+        id: "playground-interaction-details",
+        type: "details",
+        title: "Interaction locks",
+        description: "Resolved directly from runtime.interaction.",
+        source: "runtime.interaction"
+      },
+      {
+        id: "playground-actions",
+        type: "actions",
+        items: [
+          { id: "show-flow-lab", label: "Open flow lab" },
+          { id: "show-verification", label: "Open verification" },
+          { id: "show-log", label: "Open event log" },
+          { id: "show-workspace", label: "Open workspace" },
+          { id: "back-home", label: "Back home" }
+        ]
+      },
+      {
+        id: "playground-history-section",
+        type: "section",
+        title: "Session history",
+        description: "Rendered directly from runtime.history inside the dynamic screen.",
+        blocks: [
+          {
+            id: "playground-history-log",
+            type: "log",
+            title: "History stream",
+            source: "runtime.history",
+            maxItems: 10,
+            emptyLabel: "No history entries recorded yet."
+          }
+        ]
+      },
+      {
+        id: "playground-current-request-section",
+        type: "section",
+        title: "Current request chain",
+        description: "Shows only the history entries attached to the active runtime.flow.requestId.",
+        blocks: [
+          {
+            id: "playground-current-request-log",
+            type: "log",
+            title: "Current request history",
+            source: "runtime.currentRequestHistory",
+            maxItems: 8,
+            emptyLabel: "No active request chain is attached right now."
+          }
+        ]
+      },
+      {
+        id: "playground-events-section",
+        type: "section",
+        title: "Runtime events",
+        description: "Rendered directly from runtime.eventLog for transport-level inspection.",
+        blocks: [
+          {
+            id: "playground-event-log",
+            type: "log",
+            title: "Event stream",
+            source: "runtime.eventLog",
+            maxItems: 10,
+            emptyLabel: "No event log entries recorded yet."
+          }
+        ]
+      },
+      {
+        id: "playground-last-completed-request-section",
+        type: "section",
+        title: "Last completed request chain",
+        description: "Shows the latest fully completed request chain even after the runtime has returned to waiting.",
+        blocks: [
+          {
+            id: "playground-last-completed-request-log",
+            type: "log",
+            title: "Last completed request history",
+            source: "runtime.lastCompletedRequestHistory",
+            maxItems: 8,
+            emptyLabel: "No completed request chain has been recorded yet."
+          }
+        ]
+      },
+      {
+        id: "playground-resources-section",
+        type: "section",
+        title: "Bridge resources",
+        description: "Use these blocks to validate preview, open, share, and download behavior.",
+        blocks: [
+          { id: "playground-resource-link", type: "resource", resource: linkedArtifact },
+          { id: "playground-resource-report", type: "resource", resource: reportArtifact },
+          { id: "playground-resource-pdf", type: "resource", resource: pdfArtifact }
+        ]
+      }
+    ]
+  });
+}
+
+function createVerificationBoardScreen() {
+  return createStableScreen({
+    id: "remote-verification-board",
+    title: "Verification board",
+    subtitle: "Fast request-flow validation surface",
+    blocks: [
+      {
+        id: "verification-intro",
+        type: "text",
+        value:
+          "Use this surface after any voice, text, action, form, or approval flow. It is meant to answer whether the request chain behaved correctly without reading the entire event stream."
+      },
+      {
+        id: "verification-flow-details",
+        type: "details",
+        title: "Runtime flow",
+        description: "Current request pointer and last completed request pointer.",
+        source: "runtime.flow"
+      },
+      {
+        id: "verification-current-request-verdict",
+        type: "details",
+        title: "Current request verdict",
+        description: "Top-level evaluation for the active request chain.",
+        source: "runtime.currentRequestVerdict"
+      },
+      {
+        id: "verification-last-request-verdict",
+        type: "details",
+        title: "Completed request verdict",
+        description: "Top-level evaluation for the most recent completed request chain.",
+        source: "runtime.lastCompletedRequestVerdict"
+      },
+      {
+        id: "verification-metric-guide",
+        type: "details",
+        title: "Metric guide",
+        items: [
+          { id: "verification-metric-events", label: "Request events", value: "Counts every history entry attached to the active request" },
+          { id: "verification-metric-workspace", label: "Workspace events", value: "Should rise when the harness updates or patches the screen" },
+          { id: "verification-metric-patches", label: "Patch events", value: "Only increments for screen.patched and should stay 0 for direct flows" },
+          { id: "verification-metric-resources", label: "Resource events", value: "Captures artifacts and capability request or resolve activity" },
+          { id: "verification-metric-issues", label: "Issues", value: "Any non-zero issue count means the chain needs review" }
+        ]
+      },
+      {
+        id: "verification-current-request-details",
+        type: "details",
+        title: "Current request chain",
+        description: "If a flow is still active, inspect it here first.",
+        source: "runtime.currentRequest"
+      },
+      {
+        id: "verification-current-request-assertions",
+        type: "details",
+        title: "Current request assertions",
+        description: "High-level checks derived from the active request chain.",
+        source: "runtime.currentRequestAssertions"
+      },
+      {
+        id: "verification-current-request-matrix",
+        type: "details",
+        title: "Current request matrix",
+        description: "Profile-specific pass/fail checks for the active request chain.",
+        source: "runtime.currentRequestMatrix"
+      },
+      {
+        id: "verification-last-request-details",
+        type: "details",
+        title: "Last completed request chain",
+        description: "If the runtime already returned to waiting, inspect the last completed chain here.",
+        source: "runtime.lastCompletedRequest"
+      },
+      {
+        id: "verification-last-request-assertions",
+        type: "details",
+        title: "Completed request assertions",
+        description: "High-level checks derived from the most recent completed request chain.",
+        source: "runtime.lastCompletedRequestAssertions"
+      },
+      {
+        id: "verification-last-request-matrix",
+        type: "details",
+        title: "Completed request matrix",
+        description: "Profile-specific pass/fail checks for the most recent completed chain.",
+        source: "runtime.lastCompletedRequestMatrix"
+      },
+      {
+        id: "verification-lock-details",
+        type: "details",
+        title: "Interaction locks",
+        description: "Use this to confirm shell and form locking behavior.",
+        source: "runtime.interaction"
+      },
+      {
+        id: "verification-request-logs",
+        type: "section",
+        title: "Request logs",
+        description: "Compare active and completed chains without opening the full session history.",
+        blocks: [
+          {
+            id: "verification-current-request-log",
+            type: "log",
+            title: "Current request history",
+            source: "runtime.currentRequestHistory",
+            maxItems: 6,
+            emptyLabel: "No active request chain."
+          },
+          {
+            id: "verification-last-request-log",
+            type: "log",
+            title: "Last completed request history",
+            source: "runtime.lastCompletedRequestHistory",
+            maxItems: 6,
+            emptyLabel: "No completed request chain yet."
+          }
+        ]
+      },
+      {
+        id: "verification-actions",
+        type: "actions",
+        items: [
+          { id: "show-flow-lab", label: "Open flow lab" },
+          { id: "show-playground", label: "Open playground" },
+          { id: "show-log", label: "Open event log" },
+          { id: "back-home", label: "Back home" }
+        ]
+      }
+    ]
+  });
+}
+
+function createPlanScaffoldScreen(requestId) {
+  return createTaskScreen(
+    {
+      id: "remote-plan",
+      title: "Generated task plan",
+      subtitle: "Task workspace is taking shape",
+      blocks: [
+        {
+          id: "plan-intro",
+          type: "text",
+          value: "The remote harness has moved past the processing shell and is now building a task workspace."
+        },
+        {
+          id: "plan-status",
+          type: "card",
+          title: "Task stage",
+          body: "Collecting steps and preparing follow-up actions."
+        }
+      ]
     },
     {
       input: "locked",
       actions: "locked",
       forms: "locked",
       reason: "The harness is still building the task plan."
-    }
+    },
+    createOngoingFlow(requestId)
   );
 }
 
-function createPlanPatchOperations() {
-  return [
-    {
-      type: "set_subtitle",
-      subtitle: "Returned by the remote harness"
-    },
-    {
-      type: "upsert_block",
-      block: {
-        id: "plan-status",
-        type: "card",
-        title: "Plan stream",
-        body: "The remote harness incrementally patched the workspace instead of replacing the full screen."
+function createDirectResultScreen() {
+  return createResultScreen({
+    id: "remote-direct-result",
+    title: "Direct result surface",
+    subtitle: "Result returned without an intermediate task workspace",
+    blocks: [
+      {
+        id: "direct-result-intro",
+        type: "text",
+        value: "The remote harness resolved this request without opening a task screen. This is the shortest standard page flow."
+      },
+      {
+        id: "direct-result-details",
+        type: "details",
+        title: "Flow summary",
+        items: [
+          { id: "direct-result-stage-1", label: "Request path", value: "processing -> result" },
+          { id: "direct-result-stage-2", label: "Workspace", value: "Skipped intermediate task page" },
+          { id: "direct-result-stage-3", label: "State", value: "Ready for next input", tone: "success" }
+        ]
+      },
+      {
+        id: "direct-result-actions",
+        type: "actions",
+        items: [
+          { id: "show-plan", label: "Run staged plan" },
+          { id: "show-timeline", label: "Run timeline" },
+          { id: "back-home", label: "Back home" }
+        ]
       }
-    },
+    ]
+  });
+}
+
+function createPlanSettlingScreen(requestId) {
+  return createTaskScreen(
     {
-      type: "append_blocks",
+      id: "remote-plan-finalizing",
+      title: "Generated task plan",
+      subtitle: "Finalizing workspace",
       blocks: [
         {
-          id: "list-1",
-          type: "list",
-          items: [
-            { id: "a", title: "Capture voice input", description: "Submit transcript or audio context." },
-            { id: "b", title: "Plan next actions", description: "Turn intent into a constrained workspace." },
-            { id: "c", title: "Return structured UI", description: "Update the screen through schema events." },
-            { id: "d", title: "Attach artifacts", description: "Publish resources without leaking transport details into the UI layer." }
-          ]
+          id: "plan-finalizing-text",
+          type: "text",
+          value: "The remote harness has assembled the plan and is now locking the final result surface."
         },
         {
-          id: "actions-2",
-          type: "actions",
+          id: "plan-finalizing-card",
+          type: "card",
+          title: "Finalizing",
+          body: "Committing the last workspace blocks before the result surface is released."
+        }
+      ]
+    },
+    {
+      input: "locked",
+      actions: "locked",
+      forms: "locked",
+      reason: "The harness is finalizing the task plan."
+    },
+    createOngoingFlow(requestId)
+  );
+}
+
+function createPlanResultScreen() {
+  return createResultScreen({
+    id: "remote-plan-result",
+    title: "Generated task plan",
+    subtitle: "Result surface returned by the remote harness",
+    blocks: [
+      {
+        id: "plan-intro",
+        type: "text",
+        value: "The remote harness has moved past the processing shell and returned a stable result surface."
+      },
+      {
+        id: "plan-status",
+        type: "card",
+        title: "Result stage",
+        body: "The remote harness completed the staged plan flow over HTTP + SSE."
+      },
+      {
+        id: "list-1",
+        type: "list",
+        items: [
+          { id: "a", title: "Capture voice input", description: "Submit transcript or audio context." },
+          { id: "b", title: "Plan next actions", description: "Turn intent into a constrained workspace." },
+          { id: "c", title: "Return structured UI", description: "Update the screen through schema events." },
+          { id: "d", title: "Attach artifacts", description: "Publish resources without leaking transport details into the UI layer." }
+        ]
+      },
+      {
+        id: "actions-2",
+        type: "actions",
+        items: [
+          { id: "show-report", label: "Show report" },
+          { id: "preview-asset", label: "Preview artifact" },
+          { id: "back-home", label: "Back home" }
+        ]
+      }
+    ]
+  });
+}
+
+function createTimelineIntroScreen(requestId) {
+  return createTaskScreen(
+    {
+      id: "remote-task-timeline",
+      title: "Task timeline",
+      subtitle: "Task workspace is streaming step progression",
+      blocks: [
+        {
+          id: "timeline-intro",
+          type: "text",
+          value: "The remote harness is publishing a constrained task timeline instead of a free-form text dump."
+        },
+        {
+          id: "timeline-block",
+          type: "timeline",
+          title: "Execution flow",
+          description: "This block is suited for agent work that moves through clear stages.",
           items: [
-            { id: "show-report", label: "Show report" },
-            { id: "preview-asset", label: "Preview artifact" },
-            { id: "back-home", label: "Back home" }
+            {
+              id: "timeline-step-capture",
+              title: "Capture intent",
+              description: "Voice or form input has been normalized into structured task context.",
+              status: "complete",
+              meta: "done"
+            },
+            {
+              id: "timeline-step-plan",
+              title: "Build plan",
+              description: "The remote harness is decomposing the request into executable workspace steps.",
+              status: "active",
+              meta: "in progress"
+            },
+            {
+              id: "timeline-step-artifacts",
+              title: "Prepare artifacts",
+              description: "Attach report surfaces and related resources once the plan stabilizes.",
+              status: "pending",
+              meta: "queued"
+            }
           ]
         }
       ]
     },
     {
-      type: "set_interaction",
-      interaction: {
-        ...defaultScreenInteraction
-      }
-    }
-  ];
+      input: "locked",
+      actions: "locked",
+      forms: "locked",
+      reason: "The harness is still streaming task progression."
+    },
+    createOngoingFlow(requestId)
+  );
 }
 
-function createTimelineIntroScreen() {
-  return createTaskScreen(
+function createLockedTimelineInteraction(reason) {
+  return {
+    input: "locked",
+    actions: "locked",
+    forms: "locked",
+    artifacts: "enabled",
+    history: "enabled",
+    reason
+  };
+}
+
+function createTimelineStreamingPatchOperations() {
+  return [
     {
-    id: "remote-task-timeline",
-    title: "Task timeline",
-    subtitle: "Streaming step progression",
-    blocks: [
-      {
-        id: "timeline-intro",
-        type: "text",
-        value: "The remote harness is publishing a constrained task timeline instead of a free-form text dump."
-      },
-      {
+      type: "set_subtitle",
+      subtitle: "Task workspace is receiving incremental timeline patches"
+    },
+    {
+      type: "upsert_block",
+      block: {
         id: "timeline-block",
         type: "timeline",
         title: "Execution flow",
-        description: "This block is suited for agent work that moves through clear stages.",
+        description: "The remote harness is patching the active task workspace instead of replacing the full screen.",
         items: [
           {
             id: "timeline-step-capture",
@@ -331,35 +863,66 @@ function createTimelineIntroScreen() {
           {
             id: "timeline-step-plan",
             title: "Build plan",
-            description: "The remote harness is decomposing the request into executable workspace steps.",
-            status: "active",
-            meta: "in progress"
+            description: "The remote harness has locked the execution shape and advanced to the patch stage.",
+            status: "complete",
+            meta: "done"
           },
           {
             id: "timeline-step-artifacts",
             title: "Prepare artifacts",
-            description: "Attach report surfaces and related resources once the plan stabilizes.",
+            description: "Resource links and follow-up surfaces are being attached through incremental updates.",
+            status: "active",
+            meta: "patching"
+          },
+          {
+            id: "timeline-step-verify",
+            title: "Verify request chain",
+            description: "Runtime history should now show multiple workspace updates for the same request.",
             status: "pending",
             meta: "queued"
           }
         ]
       }
-    ]
     },
     {
-      input: "locked",
-      actions: "locked",
-      forms: "locked",
-      reason: "The harness is still streaming task progression."
+      type: "append_blocks",
+      blocks: [
+        {
+          id: "timeline-patch-details",
+          type: "details",
+          title: "Patch checkpoint",
+          items: [
+            {
+              id: "timeline-patch-mode",
+              label: "Update mode",
+              value: "screen.patched"
+            },
+            {
+              id: "timeline-patch-scope",
+              label: "Scope",
+              value: "Subtitle, timeline block, and diagnostics"
+            },
+            {
+              id: "timeline-patch-request",
+              label: "Expectation",
+              value: "Same requestId should survive the full patched chain"
+            }
+          ]
+        }
+      ]
     }
-  );
+  ];
 }
 
-function createTimelinePatchOperations() {
+function createTimelineFinalizingPatchOperations() {
   return [
     {
       type: "set_subtitle",
-      subtitle: "Returned by the remote harness with incremental timeline updates"
+      subtitle: "Finalizing patched timeline surface"
+    },
+    {
+      type: "set_interaction",
+      interaction: createLockedTimelineInteraction("The harness is finalizing the patched task timeline.")
     },
     {
       type: "upsert_block",
@@ -367,7 +930,67 @@ function createTimelinePatchOperations() {
         id: "timeline-block",
         type: "timeline",
         title: "Execution flow",
-        description: "The harness patched stage progress without replacing the entire workspace.",
+        description: "The active task workspace has been patched twice and is now being sealed for release.",
+        items: [
+          {
+            id: "timeline-step-capture",
+            title: "Capture intent",
+            description: "Voice or form input has been normalized into structured task context.",
+            status: "complete",
+            meta: "done"
+          },
+          {
+            id: "timeline-step-plan",
+            title: "Build plan",
+            description: "The task shape is fixed and no longer changing.",
+            status: "complete",
+            meta: "done"
+          },
+          {
+            id: "timeline-step-artifacts",
+            title: "Prepare artifacts",
+            description: "Artifact attachment has been stabilized and is ready for result release.",
+            status: "complete",
+            meta: "done"
+          },
+          {
+            id: "timeline-step-verify",
+            title: "Verify request chain",
+            description: "Diagnostics are pinned so the result screen can be released next.",
+            status: "active",
+            meta: "finalizing"
+          }
+        ]
+      }
+    },
+    {
+      type: "upsert_block",
+      block: {
+        id: "timeline-finalizing-card",
+        type: "card",
+        title: "Finalizing",
+        body: "The harness is sealing the patched workspace before releasing the final result screen."
+      }
+    }
+  ];
+}
+
+function createTimelineResultScreen() {
+  return createResultScreen({
+    id: "remote-timeline-result",
+    title: "Task timeline",
+    subtitle: "Result surface returned with staged timeline updates",
+    blocks: [
+      {
+        id: "timeline-intro",
+        type: "text",
+        value: "The remote harness is publishing a constrained task timeline instead of a free-form text dump."
+      },
+      {
+        id: "timeline-block",
+        type: "timeline",
+        title: "Execution flow",
+        description: "The remote harness advanced this request through task-state patches before releasing the final result.",
         items: [
           {
             id: "timeline-step-capture",
@@ -386,41 +1009,40 @@ function createTimelinePatchOperations() {
           {
             id: "timeline-step-artifacts",
             title: "Prepare artifacts",
-            description: "Report surfaces and resource links were attached to the next workspace.",
-            status: "active",
-            meta: "streaming"
+            description: "Report surfaces and resource links were attached during the patched task phase.",
+            status: "complete",
+            meta: "done"
           },
           {
-            id: "timeline-step-wait",
-            title: "Wait for follow-up",
-            description: "The runtime is now ready for another action or voice request.",
-            status: "pending",
-            meta: "next"
+            id: "timeline-step-verify",
+            title: "Verify request chain",
+            description: "Runtime diagnostics should show one requestId with multiple workspace patch events.",
+            status: "complete",
+            meta: "done"
           }
         ]
+      },
+      {
+        id: "timeline-result-details",
+        type: "details",
+        title: "Patch summary",
+        items: [
+          { id: "timeline-result-path", label: "Path", value: "processing -> task.updated -> task.patched -> result" },
+          { id: "timeline-result-request", label: "Request continuity", value: "One requestId across screen.updated and screen.patched events" },
+          { id: "timeline-result-debug", label: "Best check", value: "Open Verification board or Runtime playground" }
+        ]
+      },
+      {
+        id: "timeline-actions",
+        type: "actions",
+        items: [
+          { id: "show-report", label: "Show report" },
+          { id: "preview-asset", label: "Preview artifact" },
+          { id: "back-home", label: "Back home" }
+        ]
       }
-    },
-    {
-      type: "append_blocks",
-      blocks: [
-        {
-          id: "timeline-actions",
-          type: "actions",
-          items: [
-            { id: "show-report", label: "Show report" },
-            { id: "preview-asset", label: "Preview artifact" },
-            { id: "back-home", label: "Back home" }
-          ]
-        }
-      ]
-    },
-    {
-      type: "set_interaction",
-      interaction: {
-        ...defaultScreenInteraction
-      }
-    }
-  ];
+    ]
+  });
 }
 
 function createTaskBriefScreen() {
@@ -1016,6 +1638,74 @@ function createFormScreen() {
   });
 }
 
+function createFormProcessingScreen(values, requestId) {
+  return createProcessingScreen(
+    {
+      id: "remote-form-processing",
+      title: values.goal || "Form submission",
+      subtitle: "Processing structured intake",
+      blocks: [
+        {
+          id: "form-processing-text",
+          type: "text",
+          value: "The remote harness is validating the structured form values before composing the next workspace."
+        },
+        {
+          id: "form-processing-details",
+          type: "details",
+          title: "Received values",
+          items: [
+            { id: "form-processing-goal", label: "Goal", value: values.goal || "-" },
+            { id: "form-processing-duration", label: "Duration", value: values.duration || "-" },
+            {
+              id: "form-processing-constraints",
+              label: "Constraints",
+              value: values.constraints || "None provided."
+            }
+          ]
+        }
+      ]
+    },
+    {
+      input: "locked",
+      actions: "locked",
+      forms: "locked",
+      reason: "The harness is processing the submitted form."
+    },
+    createOngoingFlow(requestId)
+  );
+}
+
+function createFormSettlingScreen(values, requestId) {
+  return createTaskScreen(
+    {
+      id: "remote-form-finalizing",
+      title: values.goal || "Form submission",
+      subtitle: "Finalizing submitted fields",
+      blocks: [
+        {
+          id: "form-finalizing-text",
+          type: "text",
+          value: "The remote harness is sealing the composed screen before releasing the final result."
+        },
+        {
+          id: "form-finalizing-card",
+          type: "card",
+          title: "Finalizing",
+          body: "Structured values have been accepted and are being applied to the final workspace surface."
+        }
+      ]
+    },
+    {
+      input: "locked",
+      actions: "locked",
+      forms: "locked",
+      reason: "The harness is finalizing the submitted form."
+    },
+    createOngoingFlow(requestId)
+  );
+}
+
 function createFormResultScreen(values) {
   return createResultScreen({
     id: "remote-form-result",
@@ -1221,50 +1911,95 @@ function getNextInputScenario(session) {
   return scenario;
 }
 
-function broadcastHomeScreen(sessionId, session) {
-  broadcast(sessionId, {
-    type: "screen.updated",
-    screen: createHomeScreen(session.inputFlowMode, session.scenarioCursor)
-  });
-}
-
 function isTaskScenario(actionId) {
   return actionId === "show-plan" || actionId === "show-timeline";
 }
 
-function broadcastResolvedScreen(sessionId, screen) {
-  broadcast(sessionId, { type: "screen.updated", screen });
+function isProcessingScenario(actionId) {
+  return isTaskScenario(actionId) || actionId === "show-direct";
+}
+
+function broadcastRootScreen(sessionId, screen) {
+  broadcast(sessionId, { type: "screen.updated", screen: applyFlow(screen, createRootFlow()) });
   broadcast(sessionId, { type: "status", phase: "waiting" });
 }
 
-async function runRemoteTaskScenario(sessionId, actionId) {
+function broadcastResolvedScreen(sessionId, screen, requestId) {
+  broadcast(sessionId, {
+    type: "screen.updated",
+    screen: requestId ? applyFlow(screen, createCompletedFlow(requestId)) : screen
+  });
+  broadcast(sessionId, { type: "status", phase: "waiting" });
+}
+
+async function runRemoteTaskScenario(sessionId, actionId, requestId) {
   if (actionId === "show-plan") {
-    const scaffold = createPlanScaffoldScreen();
-    broadcast(sessionId, { type: "screen.updated", screen: scaffold });
-    await delay(340);
     broadcast(sessionId, {
-      type: "screen.patched",
-      screenId: scaffold.id,
-      operations: createPlanPatchOperations()
+      type: "screen.updated",
+      screen: createProcessingStageScreen(
+        "remote-plan-processing",
+        "Generated task plan",
+        "Processing request",
+        "The remote harness is analyzing the request before opening a task workspace.",
+        requestId
+      )
     });
-    broadcast(sessionId, { type: "status", phase: "waiting" });
+    await delay(220);
+    broadcast(sessionId, { type: "screen.updated", screen: createPlanScaffoldScreen(requestId) });
+    await delay(360);
+    broadcast(sessionId, { type: "screen.updated", screen: createPlanSettlingScreen(requestId) });
+    await delay(760);
+    broadcastResolvedScreen(sessionId, createPlanResultScreen(), requestId);
     return;
   }
 
   if (actionId === "show-timeline") {
-    const scaffold = createTimelineIntroScreen();
-    broadcast(sessionId, { type: "screen.updated", screen: scaffold });
-    await delay(340);
+    broadcast(sessionId, {
+      type: "screen.updated",
+      screen: createProcessingStageScreen(
+        "remote-timeline-processing",
+        "Task timeline",
+        "Processing request",
+        "The remote harness is organizing execution stages before opening the task timeline.",
+        requestId
+      )
+    });
+    await delay(220);
+    const timelineScreen = createTimelineIntroScreen(requestId);
+    broadcast(sessionId, { type: "screen.updated", screen: timelineScreen });
+    await delay(360);
     broadcast(sessionId, {
       type: "screen.patched",
-      screenId: scaffold.id,
-      operations: createTimelinePatchOperations()
+      screenId: timelineScreen.id,
+      operations: createTimelineStreamingPatchOperations()
     });
-    broadcast(sessionId, { type: "status", phase: "waiting" });
+    await delay(360);
+    broadcast(sessionId, {
+      type: "screen.patched",
+      screenId: timelineScreen.id,
+      operations: createTimelineFinalizingPatchOperations()
+    });
+    await delay(520);
+    broadcastResolvedScreen(sessionId, createTimelineResultScreen(), requestId);
   }
 }
 
-async function runRemoteAction(sessionId, actionId) {
+async function runRemoteDirectResultScenario(sessionId, requestId) {
+  broadcast(sessionId, {
+    type: "screen.updated",
+    screen: createProcessingStageScreen(
+      "remote-direct-processing",
+      "Direct result surface",
+      "Processing request",
+      "The remote harness is resolving the request and will return a final result without opening an intermediate task workspace.",
+      requestId
+    )
+  });
+  await delay(320);
+  broadcastResolvedScreen(sessionId, createDirectResultScreen(), requestId);
+}
+
+async function runRemoteAction(sessionId, actionId, requestId) {
   const session = ensureSession(sessionId);
 
   if (!session) {
@@ -1272,64 +2007,85 @@ async function runRemoteAction(sessionId, actionId) {
   }
 
   if (isTaskScenario(actionId)) {
-    await runRemoteTaskScenario(sessionId, actionId);
+    await runRemoteTaskScenario(sessionId, actionId, requestId);
+    return;
+  }
+
+  if (actionId === "show-direct") {
+    await runRemoteDirectResultScenario(sessionId, requestId);
+    return;
+  }
+
+  if (actionId === "show-flow-lab") {
+    broadcastResolvedScreen(sessionId, createFlowLabScreen(), requestId);
+    return;
+  }
+
+  if (actionId === "show-verification") {
+    broadcastResolvedScreen(sessionId, createVerificationBoardScreen(), requestId);
+    return;
+  }
+
+  if (actionId === "show-playground") {
+    broadcastResolvedScreen(sessionId, createRuntimePlaygroundScreen(), requestId);
     return;
   }
 
   if (actionId === "show-brief") {
-    broadcastResolvedScreen(sessionId, createTaskBriefScreen());
+    broadcastResolvedScreen(sessionId, createTaskBriefScreen(), requestId);
     return;
   }
 
   if (actionId === "show-day-planner") {
-    broadcastResolvedScreen(sessionId, createDayPlannerScreen());
+    broadcastResolvedScreen(sessionId, createDayPlannerScreen(), requestId);
     return;
   }
 
   if (actionId === "show-grocery") {
-    broadcastResolvedScreen(sessionId, createGroceryRunScreen());
+    broadcastResolvedScreen(sessionId, createGroceryRunScreen(), requestId);
     return;
   }
 
   if (actionId === "show-trip") {
-    broadcastResolvedScreen(sessionId, createTravelCompanionScreen());
+    broadcastResolvedScreen(sessionId, createTravelCompanionScreen(), requestId);
     return;
   }
 
   if (actionId === "show-wellness") {
-    broadcastResolvedScreen(sessionId, createWellnessCheckInScreen());
+    broadcastResolvedScreen(sessionId, createWellnessCheckInScreen(), requestId);
     return;
   }
 
   if (actionId === "show-log") {
-    broadcastResolvedScreen(sessionId, createEventLogScreen());
+    broadcastResolvedScreen(sessionId, createEventLogScreen(), requestId);
     return;
   }
 
   if (actionId === "show-workspace") {
-    broadcastResolvedScreen(sessionId, createGroupedWorkspaceScreen());
+    broadcastResolvedScreen(sessionId, createGroupedWorkspaceScreen(), requestId);
     return;
   }
 
   if (actionId === "show-split") {
-    broadcastResolvedScreen(sessionId, createSplitWorkspaceScreen());
+    broadcastResolvedScreen(sessionId, createSplitWorkspaceScreen(), requestId);
     return;
   }
 
   if (actionId === "show-form") {
-    broadcastResolvedScreen(sessionId, createFormScreen());
+    broadcastResolvedScreen(sessionId, createFormScreen(), requestId);
     return;
   }
 
   if (actionId === "show-ops-board") {
-    broadcastResolvedScreen(sessionId, createOpsBoardScreen());
+    broadcastResolvedScreen(sessionId, createOpsBoardScreen(), requestId);
     return;
   }
 
   if (actionId === "preview-asset") {
     broadcastResolvedScreen(
       sessionId,
-      createResourceScreen(linkedArtifact, "Resource block sent by the remote harness")
+      createResourceScreen(linkedArtifact, "Resource block sent by the remote harness"),
+      requestId
     );
     return;
   }
@@ -1337,7 +2093,17 @@ async function runRemoteAction(sessionId, actionId) {
   if (actionId === "show-report") {
     broadcastResolvedScreen(
       sessionId,
-      createResourceScreen(reportArtifact, "HTML artifact sent through the same schema surface")
+      createResourceScreen(reportArtifact, "HTML artifact sent through the same schema surface"),
+      requestId
+    );
+    return;
+  }
+
+  if (actionId === "show-pdf") {
+    broadcastResolvedScreen(
+      sessionId,
+      createResourceScreen(pdfArtifact, "PDF artifact sent through the same schema surface"),
+      requestId
     );
     return;
   }
@@ -1346,9 +2112,42 @@ async function runRemoteAction(sessionId, actionId) {
     broadcast(sessionId, {
       type: "capability.requested",
       request: {
-        id: "cap_microphone_remote_demo",
+        id: requestId ?? "cap_microphone_remote_demo",
         capability: "microphone",
         reason: "The remote harness wants to demonstrate the capability bridge flow."
+      }
+    });
+    return;
+  }
+
+  if (actionId === "request-open-url") {
+    broadcast(sessionId, {
+      type: "capability.requested",
+      request: {
+        id: requestId ?? "cap_open_url_remote_demo",
+        capability: "open-url",
+        reason: "The remote harness wants to open a linked surface through the default renderer bridge.",
+        payload: {
+          title: "Unstable UI repository",
+          url: "https://github.com/SelfMeAI/unstable-ui"
+        }
+      }
+    });
+    return;
+  }
+
+  if (actionId === "request-share") {
+    broadcast(sessionId, {
+      type: "capability.requested",
+      request: {
+        id: requestId ?? "cap_share_remote_demo",
+        capability: "share",
+        reason: "The remote harness wants to forward a generated summary into the native share sheet.",
+        payload: {
+          title: "Share runtime summary",
+          message: "Unstable UI remote harness flow is ready for the next iteration.",
+          url: "https://github.com/SelfMeAI/unstable-ui"
+        }
       }
     });
     return;
@@ -1364,21 +2163,18 @@ async function runRemoteAction(sessionId, actionId) {
 
   if (actionId === "set-input-flow-sequence") {
     session.inputFlowMode = "sequence";
-    broadcastHomeScreen(sessionId, session);
-    broadcast(sessionId, { type: "status", phase: "waiting" });
+    broadcastRootScreen(sessionId, createHomeScreen(session.inputFlowMode, session.scenarioCursor));
     return;
   }
 
   if (actionId === "set-input-flow-random") {
     session.inputFlowMode = "random";
-    broadcastHomeScreen(sessionId, session);
-    broadcast(sessionId, { type: "status", phase: "waiting" });
+    broadcastRootScreen(sessionId, createHomeScreen(session.inputFlowMode, session.scenarioCursor));
     return;
   }
 
   if (actionId === "back-home") {
-    broadcastHomeScreen(sessionId, session);
-    broadcast(sessionId, { type: "status", phase: "waiting" });
+    broadcastRootScreen(sessionId, createHomeScreen(session.inputFlowMode, session.scenarioCursor));
   }
 }
 
@@ -1396,7 +2192,7 @@ async function handleClientEvent(sessionId, event) {
     await delay(260);
     broadcast(sessionId, { type: "status", phase: "running" });
     await delay(180);
-    await runRemoteAction(sessionId, nextScenario.id);
+    await runRemoteAction(sessionId, nextScenario.id, event.clientRequestId);
     return;
   }
 
@@ -1414,19 +2210,26 @@ async function handleClientEvent(sessionId, event) {
   if (event.type === "capability.resolved") {
     broadcastResolvedScreen(
       sessionId,
-      createCapabilityResultScreen(event.requestId, event.payload?.granted, event.payload)
+      createCapabilityResultScreen(event.requestId, event.payload?.granted, event.payload),
+      event.requestId
     );
     return;
   }
 
   if (event.type === "form.submitted") {
-    broadcast(sessionId, { type: "status", phase: "running" });
-    await delay(180);
+    broadcast(sessionId, { type: "status", phase: "thinking" });
     broadcast(sessionId, {
       type: "screen.updated",
-      screen: createFormResultScreen(event.values)
+      screen: createFormProcessingScreen(event.values, event.clientRequestId)
     });
-    broadcast(sessionId, { type: "status", phase: "waiting" });
+    await delay(220);
+    broadcast(sessionId, { type: "status", phase: "running" });
+    broadcast(sessionId, {
+      type: "screen.updated",
+      screen: createFormSettlingScreen(event.values, event.clientRequestId)
+    });
+    await delay(760);
+    broadcastResolvedScreen(sessionId, createFormResultScreen(event.values), event.clientRequestId);
     return;
   }
 
@@ -1434,13 +2237,13 @@ async function handleClientEvent(sessionId, event) {
     return;
   }
 
-  if (isTaskScenario(event.actionId)) {
+  if (isProcessingScenario(event.actionId)) {
     broadcast(sessionId, { type: "status", phase: "thinking" });
     await delay(180);
     broadcast(sessionId, { type: "status", phase: "running" });
   }
 
-  await runRemoteAction(sessionId, event.actionId);
+  await runRemoteAction(sessionId, event.actionId, event.clientRequestId);
 }
 
 const server = createServer(async (req, res) => {

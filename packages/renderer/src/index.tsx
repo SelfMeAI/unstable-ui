@@ -1,10 +1,13 @@
 import { type ReactNode, useEffect, useRef, useState } from "react";
 import {
+  Animated,
+  Easing,
   Linking,
   Modal,
   Pressable,
   SafeAreaView,
   ScrollView,
+  Share,
   StyleSheet,
   Text,
   TextInput,
@@ -19,8 +22,11 @@ import type {
   Block,
   CapabilityRequest,
   ClientEvent,
+  DetailsBlock,
+  DetailItem,
   LogBlock,
-  LogItem
+  LogItem,
+  ScreenFlowTransition
 } from "@selfme/unstable-ui-protocol";
 import {
   AgentRuntimeProvider,
@@ -36,13 +42,38 @@ const defaultMockTranscripts = [
   "Create a quick follow-up draft for the latest conversation."
 ];
 
+const defaultRecentInputPreviewDurationMs = 2400;
+
+function getShellBottomReserve(inputMode: "voice" | "text", hasRecentInput: boolean) {
+  if (inputMode === "text") {
+    return hasRecentInput ? 306 : 196;
+  }
+
+  return hasRecentInput ? 296 : 186;
+}
+
 export interface VoiceShellOptions {
   enabled?: boolean;
+  defaultInputMode?: "voice" | "text";
   promptLabel?: string;
   idleLabel?: string;
   listeningLabel?: string;
   textPlaceholder?: string;
+  talkButtonLabel?: string;
+  listeningButtonLabel?: string;
+  textSubmitLabel?: string;
   mockTranscripts?: string[];
+  recentInputEnabled?: boolean;
+  recentInputDefaultVisible?: boolean;
+  autoPreviewRecentInputOnSubmit?: boolean;
+  collapseRecentInputOnModeSwitch?: boolean;
+  recentInputPreviewDurationMs?: number;
+  recentInputMaxLines?: number;
+  recentInputHeadingLabel?: string;
+  recentInputCollapsedLabel?: string;
+  recentInputExpandedLabel?: string;
+  voiceModeChipLabel?: string;
+  textModeChipLabel?: string;
 }
 
 export interface VoiceShellRenderProps {
@@ -56,9 +87,18 @@ export interface VoiceShellRenderProps {
   textValue: string;
   textPlaceholder: string;
   submitDisabled: boolean;
+  talkButtonLabel: string;
+  listeningButtonLabel: string;
+  textSubmitLabel: string;
   lastTranscript?: string;
   lastInput?: string;
   lastInputMode?: "voice" | "text";
+  recentInputHeadingLabel: string;
+  recentInputMaxLines: number;
+  recentInputCollapsedLabel: string;
+  recentInputExpandedLabel: string;
+  voiceModeChipLabel: string;
+  textModeChipLabel: string;
   showRecentInput: boolean;
   onPressIn(): void;
   onPressOut(): void;
@@ -66,6 +106,301 @@ export interface VoiceShellRenderProps {
   onToggleRecentInput(): void;
   onChangeText(value: string): void;
   onSubmitText(): void;
+}
+
+interface ResolvedVoiceShellConfig {
+  enabled: boolean;
+  defaultInputMode: "voice" | "text";
+  promptLabel: string;
+  idleLabel: string;
+  listeningLabel: string;
+  textPlaceholder: string;
+  talkButtonLabel: string;
+  listeningButtonLabel: string;
+  textSubmitLabel: string;
+  mockTranscripts: string[];
+  recentInputEnabled: boolean;
+  recentInputDefaultVisible: boolean;
+  autoPreviewRecentInputOnSubmit: boolean;
+  collapseRecentInputOnModeSwitch: boolean;
+  recentInputPreviewDurationMs: number;
+  recentInputMaxLines: number;
+  recentInputHeadingLabel: string;
+  recentInputCollapsedLabel: string;
+  recentInputExpandedLabel: string;
+  voiceModeChipLabel: string;
+  textModeChipLabel: string;
+}
+
+interface UseVoiceShellStateArgs {
+  config: ResolvedVoiceShellConfig;
+  runtimeStatus: string;
+  shellLocked: boolean;
+  onSubmit(mode: "voice" | "text", value?: string): Promise<void>;
+}
+
+interface UseVoiceShellStateResult {
+  inputMode: "voice" | "text";
+  isListening: boolean;
+  lastInput?: string;
+  lastInputMode?: "voice" | "text";
+  lastTranscript?: string;
+  promptLabel: string;
+  idleLabel: string;
+  textPlaceholder: string;
+  talkButtonLabel: string;
+  listeningButtonLabel: string;
+  textSubmitLabel: string;
+  recentInputHeadingLabel: string;
+  recentInputMaxLines: number;
+  recentInputCollapsedLabel: string;
+  recentInputExpandedLabel: string;
+  voiceModeChipLabel: string;
+  textModeChipLabel: string;
+  statusLabel: string;
+  shellEnabled: boolean;
+  showRecentInput: boolean;
+  bottomReserve: number;
+  shellProps: VoiceShellRenderProps;
+}
+
+function resolveVoiceShellConfig(voiceShell?: VoiceShellOptions): ResolvedVoiceShellConfig {
+  return {
+    enabled: voiceShell?.enabled ?? true,
+    defaultInputMode: voiceShell?.defaultInputMode ?? "voice",
+    promptLabel:
+      voiceShell?.promptLabel ?? "Hold to talk. Voice input is mocked until the microphone bridge is implemented.",
+    idleLabel: voiceShell?.idleLabel ?? "Press and hold to talk",
+    listeningLabel: voiceShell?.listeningLabel ?? "Listening",
+    textPlaceholder: voiceShell?.textPlaceholder ?? "Type a request for the harness",
+    talkButtonLabel: voiceShell?.talkButtonLabel ?? "Talk",
+    listeningButtonLabel: voiceShell?.listeningButtonLabel ?? "Send",
+    textSubmitLabel: voiceShell?.textSubmitLabel ?? "Send",
+    mockTranscripts: voiceShell?.mockTranscripts?.length ? voiceShell.mockTranscripts : defaultMockTranscripts,
+    recentInputEnabled: voiceShell?.recentInputEnabled ?? true,
+    recentInputDefaultVisible: voiceShell?.recentInputEnabled === false ? false : (voiceShell?.recentInputDefaultVisible ?? false),
+    autoPreviewRecentInputOnSubmit: voiceShell?.autoPreviewRecentInputOnSubmit ?? true,
+    collapseRecentInputOnModeSwitch: voiceShell?.collapseRecentInputOnModeSwitch ?? true,
+    recentInputPreviewDurationMs:
+      voiceShell?.recentInputPreviewDurationMs ?? defaultRecentInputPreviewDurationMs,
+    recentInputMaxLines: voiceShell?.recentInputMaxLines ?? 2,
+    recentInputHeadingLabel: voiceShell?.recentInputHeadingLabel ?? "Last",
+    recentInputCollapsedLabel: voiceShell?.recentInputCollapsedLabel ?? "LAST",
+    recentInputExpandedLabel: voiceShell?.recentInputExpandedLabel ?? "HIDE",
+    voiceModeChipLabel: voiceShell?.voiceModeChipLabel ?? "MIC",
+    textModeChipLabel: voiceShell?.textModeChipLabel ?? "TXT"
+  };
+}
+
+function useVoiceShellState({
+  config,
+  runtimeStatus,
+  shellLocked,
+  onSubmit
+}: UseVoiceShellStateArgs): UseVoiceShellStateResult {
+  const [inputMode, setInputMode] = useState<"voice" | "text">(config.defaultInputMode);
+  const [isListening, setIsListening] = useState(false);
+  const [showRecentInput, setShowRecentInput] = useState(config.recentInputDefaultVisible);
+  const [textValue, setTextValue] = useState("");
+  const [lastInput, setLastInput] = useState<string>();
+  const [lastInputMode, setLastInputMode] = useState<"voice" | "text">();
+  const [lastTranscript, setLastTranscript] = useState<string>();
+  const [transcriptIndex, setTranscriptIndex] = useState(0);
+  const recentInputHideTimerRef = useRef<ReturnType<typeof setTimeout> | undefined>(undefined);
+
+  function clearRecentInputHideTimer() {
+    if (recentInputHideTimerRef.current) {
+      clearTimeout(recentInputHideTimerRef.current);
+      recentInputHideTimerRef.current = undefined;
+    }
+  }
+
+  function revealRecentInputTemporarily() {
+    if (!config.recentInputEnabled || !config.autoPreviewRecentInputOnSubmit) {
+      return;
+    }
+
+    clearRecentInputHideTimer();
+    setShowRecentInput(true);
+    recentInputHideTimerRef.current = setTimeout(() => {
+      setShowRecentInput(false);
+      recentInputHideTimerRef.current = undefined;
+    }, config.recentInputPreviewDurationMs);
+  }
+
+  async function handleVoiceCommit() {
+    if (!config.enabled || shellLocked || !isListening) {
+      return;
+    }
+
+    setIsListening(false);
+
+    const transcript = config.mockTranscripts[transcriptIndex % config.mockTranscripts.length];
+    setTranscriptIndex((value) => value + 1);
+    setLastTranscript(transcript);
+    setLastInput(transcript);
+    setLastInputMode("voice");
+    revealRecentInputTemporarily();
+
+    await onSubmit("voice", transcript);
+  }
+
+  async function handleTextSubmit() {
+    if (!config.enabled || shellLocked) {
+      return;
+    }
+
+    const nextText = textValue.trim();
+
+    if (!nextText) {
+      return;
+    }
+
+    setLastInput(nextText);
+    setLastInputMode("text");
+    setTextValue("");
+    revealRecentInputTemporarily();
+
+    await onSubmit("text", nextText);
+  }
+
+  useEffect(() => {
+    return () => {
+      clearRecentInputHideTimer();
+    };
+  }, []);
+
+  useEffect(() => {
+    if (!config.enabled && isListening) {
+      setIsListening(false);
+    }
+  }, [config.enabled, isListening]);
+
+  useEffect(() => {
+    if (!config.recentInputEnabled) {
+      clearRecentInputHideTimer();
+      setShowRecentInput(false);
+    }
+  }, [config.recentInputEnabled]);
+
+  useEffect(() => {
+    if (isListening || textValue.trim()) {
+      return;
+    }
+
+    setInputMode((value) => (value === config.defaultInputMode ? value : config.defaultInputMode));
+  }, [config.defaultInputMode, isListening, textValue]);
+
+  const visibleRecentInput = config.recentInputEnabled && showRecentInput;
+  const bottomReserve = getShellBottomReserve(inputMode, Boolean((lastInput ?? lastTranscript) && visibleRecentInput));
+  const statusLabel = isListening ? config.listeningLabel : runtimeStatus;
+  const idleLabel = config.idleLabel;
+  const promptLabel = config.promptLabel;
+  const textPlaceholder = config.textPlaceholder;
+  const talkButtonLabel = config.talkButtonLabel;
+  const listeningButtonLabel = config.listeningButtonLabel;
+  const textSubmitLabel = config.textSubmitLabel;
+  const recentInputHeadingLabel = config.recentInputHeadingLabel;
+  const recentInputMaxLines = config.recentInputMaxLines;
+  const recentInputCollapsedLabel = config.recentInputCollapsedLabel;
+  const recentInputExpandedLabel = config.recentInputExpandedLabel;
+  const voiceModeChipLabel = config.voiceModeChipLabel;
+  const textModeChipLabel = config.textModeChipLabel;
+
+  const shellProps: VoiceShellRenderProps = {
+    disabled: !config.enabled || shellLocked,
+    inputMode,
+    isListening,
+    statusLabel,
+    promptLabel,
+    actionLabel: isListening ? config.listeningLabel : idleLabel,
+    secondaryActionLabel: inputMode === "voice" ? "Type instead" : "Use voice",
+    textValue,
+    textPlaceholder,
+    submitDisabled: !textValue.trim(),
+    talkButtonLabel,
+    listeningButtonLabel,
+    textSubmitLabel,
+    lastTranscript,
+    lastInput,
+    lastInputMode,
+    recentInputHeadingLabel,
+    recentInputMaxLines,
+    recentInputCollapsedLabel,
+    recentInputExpandedLabel,
+    voiceModeChipLabel,
+    textModeChipLabel,
+    showRecentInput: visibleRecentInput,
+    onPressIn: () => {
+      if (!config.enabled || shellLocked || inputMode !== "voice") {
+        return;
+      }
+
+      setIsListening(true);
+    },
+    onPressOut: () => {
+      if (inputMode !== "voice") {
+        return;
+      }
+
+      void handleVoiceCommit();
+    },
+    onToggleInputMode: () => {
+      if (shellLocked) {
+        return;
+      }
+
+      setIsListening(false);
+
+      if (config.collapseRecentInputOnModeSwitch) {
+        clearRecentInputHideTimer();
+        if (config.recentInputEnabled) {
+          setShowRecentInput(false);
+        }
+      }
+
+      setInputMode((value) => (value === "voice" ? "text" : "voice"));
+    },
+    onToggleRecentInput: () => {
+      if (!config.recentInputEnabled) {
+        return;
+      }
+
+      clearRecentInputHideTimer();
+      setShowRecentInput((value) => !value);
+    },
+    onChangeText: (value) => {
+      setTextValue(value);
+    },
+    onSubmitText: () => {
+      void handleTextSubmit();
+    }
+  };
+
+  return {
+    inputMode,
+    isListening,
+    lastInput,
+    lastInputMode,
+    lastTranscript,
+    promptLabel,
+    idleLabel,
+    textPlaceholder,
+    talkButtonLabel,
+    listeningButtonLabel,
+    textSubmitLabel,
+    recentInputHeadingLabel,
+    recentInputMaxLines,
+    recentInputCollapsedLabel,
+    recentInputExpandedLabel,
+    voiceModeChipLabel,
+    textModeChipLabel,
+    statusLabel,
+    shellEnabled: config.enabled,
+    showRecentInput: visibleRecentInput,
+    bottomReserve,
+    shellProps
+  };
 }
 
 export interface ArtifactPreviewField {
@@ -82,11 +417,15 @@ export interface ArtifactPreviewDescriptor {
 
 export interface ArtifactHandlerContext {
   openWithSystem(): Promise<void>;
+  shareWithSystem(): Promise<void>;
+  downloadWithSystem(): Promise<void>;
 }
 
 export interface ArtifactHandler {
   preview?: (artifact: ArtifactRef) => ArtifactPreviewDescriptor | undefined | Promise<ArtifactPreviewDescriptor | undefined>;
   open?: (artifact: ArtifactRef, context: ArtifactHandlerContext) => void | Promise<void>;
+  share?: (artifact: ArtifactRef, context: ArtifactHandlerContext) => void | Promise<void>;
+  download?: (artifact: ArtifactRef, context: ArtifactHandlerContext) => void | Promise<void>;
 }
 
 export type ArtifactHandlers = Partial<Record<ArtifactRef["kind"], ArtifactHandler>>;
@@ -127,7 +466,55 @@ export interface AgentRuntimeViewProps {
   artifactHandlers?: ArtifactHandlers;
   capabilityHandlers?: CapabilityHandlers;
   renderVoiceShell?: (props: VoiceShellRenderProps) => ReactNode;
+  transitionHooks?: RendererTransitionHooks;
   runtimeOptions?: AgentRuntimeOptions;
+}
+
+export interface RendererInteractionLockSnapshot {
+  input: boolean;
+  actions: boolean;
+  forms: boolean;
+  artifacts: boolean;
+}
+
+export interface RendererTransitionSnapshot {
+  signature: string;
+  screenId?: string;
+  screenTitle?: string;
+  mode: RuntimeContextValue["screenMode"];
+  requestId?: string;
+  flowPhase: RuntimeContextValue["flow"]["phase"];
+  flowTransition?: ScreenFlowTransition;
+  interactionReason?: string;
+  interactionLocked: RendererInteractionLockSnapshot;
+}
+
+export type RendererTransitionChange = "screen" | "mode" | "flow" | "lock";
+
+export interface RendererScreenTransitionEvent {
+  changed: RendererTransitionChange[];
+  previous: RendererTransitionSnapshot;
+  current: RendererTransitionSnapshot;
+}
+
+export interface RendererFlowChangeEvent {
+  previous: Pick<RendererTransitionSnapshot, "screenId" | "mode" | "requestId" | "flowPhase" | "flowTransition">;
+  current: Pick<RendererTransitionSnapshot, "screenId" | "mode" | "requestId" | "flowPhase" | "flowTransition">;
+}
+
+export interface RendererInteractionLockChangeEvent {
+  previous: RendererInteractionLockSnapshot;
+  current: RendererInteractionLockSnapshot;
+  screenId?: string;
+  requestId?: string;
+  flowPhase: RuntimeContextValue["flow"]["phase"];
+  reason?: string;
+}
+
+export interface RendererTransitionHooks {
+  onScreenTransition?: (event: RendererScreenTransitionEvent) => void;
+  onFlowChange?: (event: RendererFlowChangeEvent) => void;
+  onInteractionLockChange?: (event: RendererInteractionLockChangeEvent) => void;
 }
 
 interface ArtifactPreviewState {
@@ -142,9 +529,48 @@ interface CapabilityPromptState {
 
 interface HistoryModalProps {
   history: RuntimeContextValue["history"];
+  historyEnabled: boolean;
   visible: boolean;
   onClose(): void;
 }
+
+interface HistoryRequestGroup {
+  id: string;
+  requestId?: string;
+  source?: RuntimeContextValue["history"][number]["requestSource"];
+  entries: RuntimeContextValue["history"];
+  latestTimestamp: string;
+  kinds: RuntimeContextValue["history"][number]["kind"][];
+  latestTitle: string;
+}
+
+interface RequestChainSummary {
+  requestId?: string;
+  source?: RuntimeContextValue["history"][number]["requestSource"];
+  entryCount: number;
+  workspaceCount: number;
+  patchCount: number;
+  resourceCount: number;
+  issueCount: number;
+  actionCount: number;
+  inputCount: number;
+  formCount: number;
+  firstTitle?: string;
+  latestTitle?: string;
+  latestScreenId?: string;
+  latestScreenMode?: RuntimeContextValue["history"][number]["screenMode"];
+  modePath: string;
+  hasResultScreen: boolean;
+  hasTaskScreen: boolean;
+  hasProcessingScreen: boolean;
+  hasCapability: boolean;
+  hasArtifact: boolean;
+  hasForm: boolean;
+  hasError: boolean;
+}
+
+type RequestFlowProfile = "direct" | "staged" | "patched" | "approval" | "form" | "unknown";
+type RequestVerdict = "pass" | "needs-review" | "idle";
 
 interface RenderSnapshot {
   signature: string;
@@ -158,7 +584,7 @@ interface RenderSnapshot {
   blockTypeCount: number;
 }
 
-type HistoryFilter = "all" | "input" | "workspace" | "resource" | "issue";
+type HistoryFilter = "all" | "input" | "workspace" | "resource" | "issue" | "patched";
 type ScreenArchetype = "plan" | "timeline" | "brief" | "form" | "workspace" | "resource";
 type LeafBlock = Exclude<Block, { type: "section" | "split" }>;
 type NestableBlock = Exclude<Block, { type: "split" }>;
@@ -166,6 +592,114 @@ type NestableBlock = Exclude<Block, { type: "split" }>;
 function formatRuntimeEventLogMeta(entry: RuntimeEventLogEntry) {
   const timestamp = entry.timestamp.slice(11, 19);
   return `${entry.direction} · ${timestamp}`;
+}
+
+function toPreviewValue(value: unknown) {
+  if (typeof value === "string") {
+    return value;
+  }
+
+  return JSON.stringify(value);
+}
+
+function createCapabilityPayloadFields(payload?: Record<string, unknown>): CapabilityPromptField[] {
+  const fields: CapabilityPromptField[] = [];
+
+  if (!payload) {
+    return fields;
+  }
+
+  for (const [key, value] of Object.entries(payload)) {
+    if (value === undefined) {
+      continue;
+    }
+
+    fields.push({
+      label: key,
+      value: toPreviewValue(value)
+    });
+  }
+
+  return fields;
+}
+
+function getCapabilityDisplayName(capability: CapabilityRequest["capability"]) {
+  switch (capability) {
+    case "microphone":
+      return "Microphone access";
+    case "camera":
+      return "Camera access";
+    case "photo-library":
+      return "Photo library access";
+    case "location":
+      return "Location access";
+    case "file-picker":
+      return "File picker";
+    case "share":
+      return "Share sheet";
+    case "open-url":
+      return "Open external link";
+    default:
+      return "Device capability";
+  }
+}
+
+function getArtifactKindDescription(kind: ArtifactRef["kind"]) {
+  switch (kind) {
+    case "link":
+      return "A remote link that can be previewed in-app and opened with the system browser.";
+    case "html":
+      return "An HTML surface that can be opened with the system browser.";
+    case "image":
+      return "An image resource returned by the harness.";
+    case "audio":
+      return "An audio resource returned by the harness.";
+    case "video":
+      return "A video resource returned by the harness.";
+    case "pdf":
+      return "A PDF resource returned by the harness.";
+    case "json":
+      return "A JSON resource returned by the harness.";
+    case "text":
+      return "A text resource returned by the harness.";
+    case "file":
+      return "A downloadable file returned by the harness.";
+    default:
+      return "Default artifact preview generated by the renderer.";
+  }
+}
+
+function getArtifactOpenLabel(kind: ArtifactRef["kind"]) {
+  switch (kind) {
+    case "link":
+      return "Open link";
+    case "html":
+      return "Open page";
+    case "pdf":
+      return "Open PDF";
+    case "image":
+      return "Open image";
+    case "audio":
+      return "Open audio";
+    case "video":
+      return "Open video";
+    case "json":
+      return "Open resource";
+    case "text":
+      return "Open text";
+    case "file":
+      return "Open file";
+    default:
+      return "Open in system";
+  }
+}
+
+function canShareArtifact(resource: ArtifactRef) {
+  return Boolean(resource.uri);
+}
+
+function canDownloadArtifact(resource: ArtifactRef) {
+  return Boolean(resource.uri) && resource.kind !== "link" && resource.kind !== "html";
 }
 
 function createRuntimeLogItem(entry: RuntimeEventLogEntry): LogItem {
@@ -196,9 +730,965 @@ function createRuntimeLogItem(entry: RuntimeEventLogEntry): LogItem {
   };
 }
 
-function resolveRuntimeLeafBlock(block: LeafBlock, runtime: RuntimeContextValue): LeafBlock {
-  if (block.type !== "log" || block.source !== "runtime.eventLog") {
+function createHistoryLogItem(entry: RuntimeContextValue["history"][number]): LogItem {
+  return {
+    id: entry.id,
+    title: `${getHistoryRoleLabel(entry.role)} · ${entry.title}`,
+    body: entry.body,
+    meta: `${getHistoryKindLabel(entry.kind)} · ${formatHistoryMeta(entry)}`,
+    tone:
+      entry.kind === "error"
+        ? "danger"
+        : entry.kind === "artifact" || entry.kind === "capability"
+          ? "success"
+          : entry.kind === "workspace"
+            ? "warning"
+            : "default"
+  };
+}
+
+function createCurrentRequestHistoryItems(runtime: RuntimeContextValue, maxItems?: number) {
+  const activeRequestId = runtime.flow.requestId;
+  const items = activeRequestId
+    ? runtime.history.filter((entry) => entry.requestId === activeRequestId)
+    : [];
+
+  return items
+    .slice(-(maxItems ?? 20))
+    .reverse()
+    .map(createHistoryLogItem);
+}
+
+function getCurrentRequestEntries(runtime: RuntimeContextValue) {
+  return runtime.flow.requestId
+    ? runtime.history.filter((entry) => entry.requestId === runtime.flow.requestId)
+    : [];
+}
+
+function getLastCompletedRequestEntries(runtime: RuntimeContextValue) {
+  return runtime.flow.lastCompletedRequestId
+    ? runtime.history.filter((entry) => entry.requestId === runtime.flow.lastCompletedRequestId)
+    : [];
+}
+
+function summarizeRequestEntries(
+  entries: RuntimeContextValue["history"],
+  fallbackRequestId?: string
+): RequestChainSummary {
+  const firstEntry = entries[0];
+  const latestEntry = entries[entries.length - 1];
+  const screenModes = entries
+    .map((entry) => entry.screenMode)
+    .filter((mode): mode is NonNullable<typeof mode> => Boolean(mode));
+  const uniqueScreenModes = [...new Set(screenModes)];
+  const workspaceCount = entries.filter((entry) => entry.kind === "workspace").length;
+  const patchCount = entries.filter((entry) => entry.eventType === "screen.patched").length;
+  const resourceCount = entries.filter((entry) => entry.kind === "artifact" || entry.kind === "capability").length;
+  const issueCount = entries.filter((entry) => entry.kind === "error").length;
+  const actionCount = entries.filter((entry) => entry.kind === "action").length;
+  const inputCount = entries.filter((entry) => entry.kind === "input").length;
+  const formCount = entries.filter((entry) => entry.kind === "form").length;
+
+  return {
+    requestId: latestEntry?.requestId ?? firstEntry?.requestId ?? fallbackRequestId,
+    source: latestEntry?.requestSource ?? firstEntry?.requestSource,
+    entryCount: entries.length,
+    workspaceCount,
+    patchCount,
+    resourceCount,
+    issueCount,
+    actionCount,
+    inputCount,
+    formCount,
+    firstTitle: firstEntry?.title,
+    latestTitle: latestEntry?.title,
+    latestScreenId: latestEntry?.screenId,
+    latestScreenMode: latestEntry?.screenMode,
+    modePath: uniqueScreenModes.length > 0 ? uniqueScreenModes.join(" -> ") : "None",
+    hasResultScreen: screenModes.includes("result"),
+    hasTaskScreen: screenModes.includes("task"),
+    hasProcessingScreen: screenModes.includes("processing"),
+    hasCapability: entries.some((entry) => entry.kind === "capability"),
+    hasArtifact: entries.some((entry) => entry.kind === "artifact"),
+    hasForm: entries.some((entry) => entry.kind === "form"),
+    hasError: entries.some((entry) => entry.kind === "error")
+  };
+}
+
+function createLastCompletedRequestHistoryItems(runtime: RuntimeContextValue, maxItems?: number) {
+  return getLastCompletedRequestEntries(runtime)
+    .slice(-(maxItems ?? 20))
+    .reverse()
+    .map(createHistoryLogItem);
+}
+
+function getRequestSummarySignal(summary: RequestChainSummary) {
+  if (summary.hasError || summary.issueCount > 0) {
+    return "warning" as const;
+  }
+
+  if (summary.hasResultScreen) {
+    return "success" as const;
+  }
+
+  if (summary.entryCount > 0) {
+    return "warning" as const;
+  }
+
+  return "default" as const;
+}
+
+function inferRequestFlowProfile(summary: RequestChainSummary): RequestFlowProfile {
+  if (!summary.requestId) {
+    return "unknown";
+  }
+
+  if (summary.source === "form" || summary.hasForm || summary.formCount > 0) {
+    return "form";
+  }
+
+  if (summary.hasCapability) {
+    return "approval";
+  }
+
+  if (summary.patchCount > 0) {
+    return "patched";
+  }
+
+  if (summary.hasTaskScreen || summary.workspaceCount > 2) {
+    return "staged";
+  }
+
+  if (summary.hasProcessingScreen && summary.hasResultScreen) {
+    return "direct";
+  }
+
+  return "unknown";
+}
+
+function getRequestFlowProfileLabel(profile: RequestFlowProfile) {
+  switch (profile) {
+    case "direct":
+      return "Direct flow";
+    case "staged":
+      return "Staged flow";
+    case "patched":
+      return "Patched flow";
+    case "approval":
+      return "Approval flow";
+    case "form":
+      return "Form flow";
+    case "unknown":
+    default:
+      return "Unknown flow";
+  }
+}
+
+function createProfileAssertionItem(summary: RequestChainSummary): DetailItem {
+  const profile = inferRequestFlowProfile(summary);
+
+  switch (profile) {
+    case "direct":
+      return {
+        id: "request-profile-assertion",
+        label: "Profile assertion",
+        value: summary.patchCount === 0 ? "Direct flow detected with no patch events" : "Direct flow should not record patch events",
+        tone: summary.patchCount === 0 ? "success" : "warning"
+      };
+    case "staged":
+      return {
+        id: "request-profile-assertion",
+        label: "Profile assertion",
+        value:
+          summary.workspaceCount > 1
+            ? "Staged flow detected with multiple workspace events"
+            : "Staged flow should produce multiple workspace events",
+        tone: summary.workspaceCount > 1 ? "success" : "warning"
+      };
+    case "patched":
+      return {
+        id: "request-profile-assertion",
+        label: "Profile assertion",
+        value:
+          summary.patchCount > 0
+            ? "Patched flow detected with incremental screen updates"
+            : "Patched flow should record one or more patch events",
+        tone: summary.patchCount > 0 ? "success" : "danger"
+      };
+    case "approval":
+      return {
+        id: "request-profile-assertion",
+        label: "Profile assertion",
+        value:
+          summary.hasCapability && summary.resourceCount > 0
+            ? "Approval flow detected with capability activity"
+            : "Approval flow should include capability activity",
+        tone: summary.hasCapability && summary.resourceCount > 0 ? "success" : "danger"
+      };
+    case "form":
+      return {
+        id: "request-profile-assertion",
+        label: "Profile assertion",
+        value:
+          (summary.source === "form" || summary.formCount > 0)
+            ? "Form flow detected with structured submission history"
+            : "Form flow should preserve form-origin request history",
+        tone: summary.source === "form" || summary.formCount > 0 ? "success" : "danger"
+      };
+    case "unknown":
+    default:
+      return {
+        id: "request-profile-assertion",
+        label: "Profile assertion",
+        value: "Flow profile is not specific enough to evaluate yet",
+        tone: "default"
+      };
+  }
+}
+
+function createCurrentRequestAssertionItems(
+  runtime: RuntimeContextValue,
+  summary: RequestChainSummary
+): DetailItem[] {
+  const hasActiveRequest = Boolean(runtime.flow.requestId);
+  const shouldBeLocked =
+    runtime.flow.phase === "active" &&
+    (runtime.flow.screenMode === "processing" ||
+      runtime.flow.screenMode === "task" ||
+      runtime.flow.screenMode === "approval");
+  const inputLocked = runtime.interaction.input === "locked";
+  const profile = inferRequestFlowProfile(summary);
+
+  return [
+    {
+      id: "current-request-assert-profile",
+      label: "Inferred profile",
+      value: getRequestFlowProfileLabel(profile),
+      tone: profile === "unknown" ? "default" : "success"
+    },
+    {
+      id: "current-request-assert-request-id",
+      label: "Request identity",
+      value: hasActiveRequest ? "Active requestId is attached" : "No active request chain",
+      tone: hasActiveRequest ? "success" : "default"
+    },
+    {
+      id: "current-request-assert-lock",
+      label: "Lock behavior",
+      value: shouldBeLocked
+        ? inputLocked
+          ? "Input is locked while the request is in progress"
+          : "Expected input to stay locked during the active request"
+        : inputLocked
+          ? "Input remains locked outside the expected processing window"
+          : "No lock required for the current state",
+      tone: shouldBeLocked ? (inputLocked ? "success" : "danger") : inputLocked ? "warning" : "default"
+    },
+    {
+      id: "current-request-assert-grouping",
+      label: "Grouped history",
+      value:
+        summary.entryCount > 0
+          ? `${summary.entryCount} request-linked history event(s) found`
+          : "No request-linked history entries yet",
+      tone: summary.entryCount > 0 ? "success" : "default"
+    },
+    createProfileAssertionItem(summary),
+    {
+      id: "current-request-assert-patches",
+      label: "Incremental updates",
+      value:
+        summary.patchCount > 0
+          ? `${summary.patchCount} patch event(s) observed on this chain`
+          : "No patch events observed on this chain",
+      tone: summary.patchCount > 0 ? "success" : "default"
+    },
+    {
+      id: "current-request-assert-issues",
+      label: "Issues",
+      value:
+        summary.issueCount > 0
+          ? `${summary.issueCount} issue event(s) need review`
+          : "No issue events recorded on this chain",
+      tone: summary.issueCount > 0 ? "danger" : "success"
+    }
+  ];
+}
+
+function createCompletedRequestAssertionItems(summary: RequestChainSummary): DetailItem[] {
+  const hasCompletedRequest = Boolean(summary.requestId);
+  const profile = inferRequestFlowProfile(summary);
+
+  return [
+    {
+      id: "completed-request-assert-profile",
+      label: "Inferred profile",
+      value: getRequestFlowProfileLabel(profile),
+      tone: profile === "unknown" ? "default" : "success"
+    },
+    {
+      id: "completed-request-assert-request-id",
+      label: "Completed chain",
+      value: hasCompletedRequest ? "A completed request chain is available" : "No completed request chain recorded yet",
+      tone: hasCompletedRequest ? "success" : "default"
+    },
+    {
+      id: "completed-request-assert-result",
+      label: "Result release",
+      value: summary.hasResultScreen
+        ? "A result surface was recorded for this chain"
+        : hasCompletedRequest
+          ? "No result surface was recorded for this completed chain"
+          : "No completed result to inspect",
+      tone: summary.hasResultScreen ? "success" : hasCompletedRequest ? "warning" : "default"
+    },
+    {
+      id: "completed-request-assert-grouping",
+      label: "Grouped history",
+      value:
+        summary.entryCount > 1
+          ? `${summary.entryCount} grouped history event(s) stayed attached to the chain`
+          : hasCompletedRequest
+            ? "Only one history event was attached to the chain"
+            : "No grouped history to inspect",
+      tone: summary.entryCount > 1 ? "success" : hasCompletedRequest ? "warning" : "default"
+    },
+    createProfileAssertionItem(summary),
+    {
+      id: "completed-request-assert-patches",
+      label: "Incremental updates",
+      value:
+        summary.patchCount > 0
+          ? `${summary.patchCount} patch event(s) were recorded for this completed chain`
+          : "This completed chain did not use screen patches",
+      tone: summary.patchCount > 0 ? "success" : "default"
+    },
+    {
+      id: "completed-request-assert-issues",
+      label: "Issues",
+      value:
+        summary.issueCount > 0
+          ? `${summary.issueCount} issue event(s) were recorded on this chain`
+          : "No issue events were recorded on this chain",
+      tone: summary.issueCount > 0 ? "danger" : "success"
+    }
+  ];
+}
+
+function createRequestMatrixItems(
+  summary: RequestChainSummary,
+  mode: "current" | "completed"
+): DetailItem[] {
+  const profile = inferRequestFlowProfile(summary);
+  const expectsCompletion = mode === "completed";
+  const resultOkay = !expectsCompletion || summary.hasResultScreen;
+
+  const baseItems: DetailItem[] = [
+    {
+      id: `${mode}-request-matrix-profile`,
+      label: "Matrix profile",
+      value: getRequestFlowProfileLabel(profile),
+      tone: profile === "unknown" ? "default" : "success"
+    },
+    {
+      id: `${mode}-request-matrix-grouping`,
+      label: "Grouping check",
+      value:
+        summary.entryCount > 1
+          ? `${summary.entryCount} grouped event(s) detected`
+          : summary.entryCount === 1
+            ? "Only one grouped event detected"
+            : "No grouped request history detected",
+      tone: summary.entryCount > 1 ? "success" : summary.entryCount === 1 ? "warning" : "default"
+    },
+    {
+      id: `${mode}-request-matrix-completion`,
+      label: "Completion check",
+      value: expectsCompletion
+        ? resultOkay
+          ? "Result surface recorded for this chain"
+          : "Completed chain is missing a result surface"
+        : "Completion is optional while the request is still active",
+      tone: expectsCompletion ? (resultOkay ? "success" : "danger") : "default"
+    }
+  ];
+
+  switch (profile) {
+    case "direct":
+      return [
+        ...baseItems,
+        {
+          id: `${mode}-request-matrix-direct-patches`,
+          label: "Patch expectation",
+          value: summary.patchCount === 0 ? "Direct flow has no patch events" : "Direct flow should not record patch events",
+          tone: summary.patchCount === 0 ? "success" : "warning"
+        },
+        {
+          id: `${mode}-request-matrix-direct-workspace`,
+          label: "Workspace expectation",
+          value:
+            summary.workspaceCount >= 1 && summary.workspaceCount <= 2
+              ? "Workspace count matches a short direct lifecycle"
+              : "Direct flow should stay close to one processing handoff and one result handoff",
+          tone: summary.workspaceCount >= 1 && summary.workspaceCount <= 2 ? "success" : "warning"
+        }
+      ];
+    case "staged":
+      return [
+        ...baseItems,
+        {
+          id: `${mode}-request-matrix-staged-task`,
+          label: "Task-stage expectation",
+          value: summary.hasTaskScreen ? "Task screen detected in the chain" : "Staged flow should pass through a task screen",
+          tone: summary.hasTaskScreen ? "success" : "danger"
+        },
+        {
+          id: `${mode}-request-matrix-staged-workspace`,
+          label: "Workspace expectation",
+          value:
+            summary.workspaceCount > 1
+              ? "Multiple workspace events detected for the staged chain"
+              : "Staged flow should record multiple workspace events",
+          tone: summary.workspaceCount > 1 ? "success" : "warning"
+        }
+      ];
+    case "patched":
+      return [
+        ...baseItems,
+        {
+          id: `${mode}-request-matrix-patched-patches`,
+          label: "Patch expectation",
+          value:
+            summary.patchCount > 0
+              ? `${summary.patchCount} patch event(s) recorded for this chain`
+              : "Patched flow should record one or more patch events",
+          tone: summary.patchCount > 0 ? "success" : "danger"
+        },
+        {
+          id: `${mode}-request-matrix-patched-task`,
+          label: "Task-stage expectation",
+          value:
+            summary.hasTaskScreen
+              ? "Task screen stayed active while incremental updates were applied"
+              : "Patched flow should keep a task screen alive while patches arrive",
+          tone: summary.hasTaskScreen ? "success" : "warning"
+        }
+      ];
+    case "approval":
+      return [
+        ...baseItems,
+        {
+          id: `${mode}-request-matrix-approval-capability`,
+          label: "Capability expectation",
+          value:
+            summary.hasCapability && summary.resourceCount > 0
+              ? "Capability activity is attached to the chain"
+              : "Approval flow should include capability activity",
+          tone: summary.hasCapability && summary.resourceCount > 0 ? "success" : "danger"
+        },
+        {
+          id: `${mode}-request-matrix-approval-issues`,
+          label: "Issue expectation",
+          value:
+            summary.issueCount === 0
+              ? "No approval-time issue was recorded"
+              : `${summary.issueCount} issue event(s) were recorded during approval`,
+          tone: summary.issueCount === 0 ? "success" : "danger"
+        }
+      ];
+    case "form":
+      return [
+        ...baseItems,
+        {
+          id: `${mode}-request-matrix-form-source`,
+          label: "Form-source expectation",
+          value:
+            summary.source === "form" || summary.formCount > 0
+              ? "Structured form origin is preserved"
+              : "Form flow should preserve form-origin request history",
+          tone: summary.source === "form" || summary.formCount > 0 ? "success" : "danger"
+        },
+        {
+          id: `${mode}-request-matrix-form-workspace`,
+          label: "Workspace expectation",
+          value:
+            summary.workspaceCount > 1
+              ? "Form chain progressed through follow-up workspace stages"
+              : "Form flow should continue into follow-up workspace stages",
+          tone: summary.workspaceCount > 1 ? "success" : "warning"
+        }
+      ];
+    case "unknown":
+    default:
+      return [
+        ...baseItems,
+        {
+          id: `${mode}-request-matrix-unknown`,
+          label: "Profile fit",
+          value: "The chain does not match a strict profile yet",
+          tone: "default"
+        }
+      ];
+  }
+}
+
+function inferRequestVerdict(
+  summary: RequestChainSummary,
+  mode: "current" | "completed"
+): RequestVerdict {
+  if (!summary.requestId) {
+    return "idle";
+  }
+
+  if (summary.issueCount > 0) {
+    return "needs-review";
+  }
+
+  const profile = inferRequestFlowProfile(summary);
+
+  switch (profile) {
+    case "direct":
+      return summary.patchCount === 0 ? "pass" : "needs-review";
+    case "staged":
+      return summary.hasTaskScreen && summary.workspaceCount > 1 ? "pass" : "needs-review";
+    case "patched":
+      return summary.patchCount > 0 && summary.hasTaskScreen ? "pass" : "needs-review";
+    case "approval":
+      return summary.hasCapability && summary.resourceCount > 0 ? "pass" : "needs-review";
+    case "form":
+      return summary.formCount > 0 || summary.source === "form" ? "pass" : "needs-review";
+    case "unknown":
+    default:
+      if (mode === "current") {
+        return summary.entryCount > 0 ? "needs-review" : "idle";
+      }
+
+      return summary.hasResultScreen ? "pass" : "needs-review";
+  }
+}
+
+function getRequestVerdictLabel(verdict: RequestVerdict) {
+  switch (verdict) {
+    case "pass":
+      return "Pass";
+    case "needs-review":
+      return "Needs review";
+    case "idle":
+    default:
+      return "Idle";
+  }
+}
+
+function createRequestVerdictItems(
+  summary: RequestChainSummary,
+  mode: "current" | "completed"
+): DetailItem[] {
+  const profile = inferRequestFlowProfile(summary);
+  const verdict = inferRequestVerdict(summary, mode);
+
+  return [
+    {
+      id: `${mode}-request-verdict`,
+      label: "Verdict",
+      value: getRequestVerdictLabel(verdict),
+      tone: verdict === "pass" ? "success" : verdict === "needs-review" ? "danger" : "default"
+    },
+    {
+      id: `${mode}-request-verdict-profile`,
+      label: "Profile",
+      value: getRequestFlowProfileLabel(profile),
+      tone: profile === "unknown" ? "default" : "success"
+    },
+    {
+      id: `${mode}-request-verdict-summary`,
+      label: "Reason",
+      value:
+        verdict === "pass"
+          ? "Observed request metrics match the inferred flow profile."
+          : verdict === "needs-review"
+            ? "One or more request metrics do not match the inferred flow profile."
+            : "No request chain is available for evaluation.",
+      tone: verdict === "pass" ? "success" : verdict === "needs-review" ? "warning" : "default"
+    }
+  ];
+}
+
+function getInteractionTone(value: "enabled" | "locked"): DetailItem["tone"] {
+  return value === "locked" ? "warning" : "success";
+}
+
+function createRuntimeDetailsBlock(block: DetailsBlock, runtime: RuntimeContextValue): DetailsBlock {
+  if (!block.source) {
     return block;
+  }
+
+  let items: DetailItem[] = [];
+
+  if (block.source === "runtime.flow") {
+    items = [
+      {
+        id: `${block.id}-request-id`,
+        label: "Request ID",
+        value: runtime.flow.requestId ?? "None"
+      },
+      {
+        id: `${block.id}-source`,
+        label: "Source",
+        value: runtime.flow.source ?? "None"
+      },
+      {
+        id: `${block.id}-profile`,
+        label: "Flow profile",
+        value: getRequestFlowProfileLabel(
+          inferRequestFlowProfile(
+            summarizeRequestEntries(getCurrentRequestEntries(runtime), runtime.flow.requestId)
+          )
+        )
+      },
+      {
+        id: `${block.id}-phase`,
+        label: "Flow phase",
+        value: runtime.flow.phase,
+        tone: runtime.flow.phase === "complete" ? "success" : runtime.flow.phase === "active" ? "warning" : "default"
+      },
+      {
+        id: `${block.id}-mode`,
+        label: "Screen mode",
+        value: runtime.screenMode
+      },
+      {
+        id: `${block.id}-transition`,
+        label: "Transition",
+        value: runtime.flow.transition ?? "None"
+      },
+      {
+        id: `${block.id}-screen-id`,
+        label: "Screen ID",
+        value: runtime.flow.screenId ?? "None"
+      },
+      {
+        id: `${block.id}-last-completed-request-id`,
+        label: "Last completed",
+        value: runtime.flow.lastCompletedRequestId ?? "None"
+      },
+      {
+        id: `${block.id}-history-entry-count`,
+        label: "Request events",
+        value: String(runtime.flow.historyEntryCount)
+      },
+      {
+        id: `${block.id}-workspace-event-count`,
+        label: "Workspace events",
+        value: String(runtime.flow.workspaceEventCount)
+      },
+      {
+        id: `${block.id}-patch-event-count`,
+        label: "Patch events",
+        value: String(runtime.flow.patchEventCount)
+      },
+      {
+        id: `${block.id}-resource-event-count`,
+        label: "Resource events",
+        value: String(runtime.flow.resourceEventCount)
+      },
+      {
+        id: `${block.id}-issue-count`,
+        label: "Issues",
+        value: String(runtime.flow.issueCount)
+      }
+    ];
+  } else if (block.source === "runtime.interaction") {
+    items = [
+      {
+        id: `${block.id}-input`,
+        label: "Input",
+        value: runtime.interaction.input,
+        tone: getInteractionTone(runtime.interaction.input)
+      },
+      {
+        id: `${block.id}-actions`,
+        label: "Actions",
+        value: runtime.interaction.actions,
+        tone: getInteractionTone(runtime.interaction.actions)
+      },
+      {
+        id: `${block.id}-forms`,
+        label: "Forms",
+        value: runtime.interaction.forms,
+        tone: getInteractionTone(runtime.interaction.forms)
+      },
+      {
+        id: `${block.id}-artifacts`,
+        label: "Artifacts",
+        value: runtime.interaction.artifacts,
+        tone: getInteractionTone(runtime.interaction.artifacts)
+      },
+      {
+        id: `${block.id}-history`,
+        label: "History",
+        value: runtime.interaction.history,
+        tone: getInteractionTone(runtime.interaction.history)
+      },
+      {
+        id: `${block.id}-reason`,
+        label: "Lock reason",
+        value: runtime.interaction.reason ?? "None"
+      }
+    ];
+  } else if (block.source === "runtime.session") {
+    items = [
+      {
+        id: `${block.id}-session-id`,
+        label: "Session ID",
+        value: runtime.sessionId ?? "None"
+      },
+      {
+        id: `${block.id}-runtime-phase`,
+        label: "Runtime phase",
+        value: runtime.phase
+      },
+      {
+        id: `${block.id}-status`,
+        label: "Status",
+        value: runtime.status
+      },
+      {
+        id: `${block.id}-screen-title`,
+        label: "Screen title",
+        value: runtime.screen?.title ?? "None"
+      },
+      {
+        id: `${block.id}-history-count`,
+        label: "History entries",
+        value: String(runtime.history.length)
+      },
+      {
+        id: `${block.id}-event-count`,
+        label: "Event entries",
+        value: String(runtime.eventLog.length)
+      }
+    ];
+  } else if (block.source === "runtime.currentRequest") {
+    const requestEntries = getCurrentRequestEntries(runtime);
+    const summary = summarizeRequestEntries(requestEntries, runtime.flow.requestId);
+    const profile = inferRequestFlowProfile(summary);
+
+    items = [
+      {
+        id: `${block.id}-request-id`,
+        label: "Request ID",
+        value: runtime.flow.requestId ?? "None"
+      },
+      {
+        id: `${block.id}-source`,
+        label: "Source",
+        value: runtime.flow.source ?? "None"
+      },
+      {
+        id: `${block.id}-profile`,
+        label: "Flow profile",
+        value: getRequestFlowProfileLabel(profile)
+      },
+      {
+        id: `${block.id}-phase`,
+        label: "Flow phase",
+        value: runtime.flow.phase,
+        tone: runtime.flow.phase === "complete" ? "success" : runtime.flow.phase === "active" ? "warning" : "default"
+      },
+      {
+        id: `${block.id}-screen-mode`,
+        label: "Screen mode",
+        value: runtime.flow.screenMode
+      },
+      {
+        id: `${block.id}-screen-id`,
+        label: "Screen ID",
+        value: runtime.flow.screenId ?? "None"
+      },
+      {
+        id: `${block.id}-entry-count`,
+        label: "History entries",
+        value: String(summary.entryCount)
+      },
+      {
+        id: `${block.id}-latest-entry`,
+        label: "Latest entry",
+        value: summary.latestTitle ?? "None"
+      },
+      {
+        id: `${block.id}-mode-path`,
+        label: "Mode path",
+        value: summary.modePath
+      },
+      {
+        id: `${block.id}-workspace-count`,
+        label: "Workspace events",
+        value: String(summary.workspaceCount)
+      },
+      {
+        id: `${block.id}-patch-count`,
+        label: "Patch events",
+        value: String(summary.patchCount)
+      },
+      {
+        id: `${block.id}-resource-count`,
+        label: "Resource events",
+        value: String(summary.resourceCount)
+      },
+      {
+        id: `${block.id}-request-signal`,
+        label: "Chain signal",
+        value: summary.hasResultScreen ? "Result released" : summary.entryCount > 0 ? "Still evolving" : "No active chain",
+        tone: getRequestSummarySignal(summary)
+      },
+      {
+        id: `${block.id}-last-completed`,
+        label: "Last completed",
+        value: runtime.flow.lastCompletedRequestId ?? "None"
+      }
+    ];
+  } else if (block.source === "runtime.lastCompletedRequest") {
+    const requestEntries = getLastCompletedRequestEntries(runtime);
+    const summary = summarizeRequestEntries(requestEntries, runtime.flow.lastCompletedRequestId);
+    const profile = inferRequestFlowProfile(summary);
+
+    items = [
+      {
+        id: `${block.id}-request-id`,
+        label: "Request ID",
+        value: runtime.flow.lastCompletedRequestId ?? "None"
+      },
+      {
+        id: `${block.id}-source`,
+        label: "Source",
+        value: formatHistoryRequestSource(summary.source) ?? "None"
+      },
+      {
+        id: `${block.id}-profile`,
+        label: "Flow profile",
+        value: getRequestFlowProfileLabel(profile)
+      },
+      {
+        id: `${block.id}-entry-count`,
+        label: "History entries",
+        value: String(summary.entryCount)
+      },
+      {
+        id: `${block.id}-first-entry`,
+        label: "First entry",
+        value: summary.firstTitle ?? "None"
+      },
+      {
+        id: `${block.id}-latest-entry`,
+        label: "Latest entry",
+        value: summary.latestTitle ?? "None"
+      },
+      {
+        id: `${block.id}-mode-path`,
+        label: "Mode path",
+        value: summary.modePath
+      },
+      {
+        id: `${block.id}-workspace-count`,
+        label: "Workspace events",
+        value: String(summary.workspaceCount)
+      },
+      {
+        id: `${block.id}-patch-count`,
+        label: "Patch events",
+        value: String(summary.patchCount)
+      },
+      {
+        id: `${block.id}-resource-count`,
+        label: "Resource events",
+        value: String(summary.resourceCount)
+      },
+      {
+        id: `${block.id}-screen-id`,
+        label: "Last screen ID",
+        value: summary.latestScreenId ?? "None"
+      },
+      {
+        id: `${block.id}-screen-mode`,
+        label: "Last screen mode",
+        value: summary.latestScreenMode ?? "None"
+      },
+      {
+        id: `${block.id}-request-signal`,
+        label: "Chain signal",
+        value: summary.hasResultScreen ? "Completed with result" : summary.hasError ? "Completed with issues" : "Completed",
+        tone: getRequestSummarySignal(summary)
+      }
+    ];
+  } else if (block.source === "runtime.currentRequestAssertions") {
+    const requestEntries = getCurrentRequestEntries(runtime);
+    const summary = summarizeRequestEntries(requestEntries, runtime.flow.requestId);
+    items = createCurrentRequestAssertionItems(runtime, summary);
+  } else if (block.source === "runtime.lastCompletedRequestAssertions") {
+    const requestEntries = getLastCompletedRequestEntries(runtime);
+    const summary = summarizeRequestEntries(requestEntries, runtime.flow.lastCompletedRequestId);
+    items = createCompletedRequestAssertionItems(summary);
+  } else if (block.source === "runtime.currentRequestMatrix") {
+    const requestEntries = getCurrentRequestEntries(runtime);
+    const summary = summarizeRequestEntries(requestEntries, runtime.flow.requestId);
+    items = createRequestMatrixItems(summary, "current");
+  } else if (block.source === "runtime.lastCompletedRequestMatrix") {
+    const requestEntries = getLastCompletedRequestEntries(runtime);
+    const summary = summarizeRequestEntries(requestEntries, runtime.flow.lastCompletedRequestId);
+    items = createRequestMatrixItems(summary, "completed");
+  } else if (block.source === "runtime.currentRequestVerdict") {
+    const requestEntries = getCurrentRequestEntries(runtime);
+    const summary = summarizeRequestEntries(requestEntries, runtime.flow.requestId);
+    items = createRequestVerdictItems(summary, "current");
+  } else if (block.source === "runtime.lastCompletedRequestVerdict") {
+    const requestEntries = getLastCompletedRequestEntries(runtime);
+    const summary = summarizeRequestEntries(requestEntries, runtime.flow.lastCompletedRequestId);
+    items = createRequestVerdictItems(summary, "completed");
+  }
+
+  return {
+    ...block,
+    items
+  };
+}
+
+function resolveRuntimeLeafBlock(block: LeafBlock, runtime: RuntimeContextValue): LeafBlock {
+  if (block.type === "details" && block.source) {
+    return createRuntimeDetailsBlock(block, runtime);
+  }
+
+  if (block.type !== "log" || !block.source) {
+    return block;
+  }
+
+  if (block.source === "runtime.history") {
+    const historyLogBlock: LogBlock = {
+      ...block,
+      items: [...runtime.history]
+        .reverse()
+        .slice(0, block.maxItems ?? 20)
+        .map(createHistoryLogItem)
+    };
+
+    return historyLogBlock;
+  }
+
+  if (block.source === "runtime.currentRequestHistory") {
+    const currentRequestHistoryLogBlock: LogBlock = {
+      ...block,
+      items: createCurrentRequestHistoryItems(runtime, block.maxItems)
+    };
+
+    return currentRequestHistoryLogBlock;
+  }
+
+  if (block.source === "runtime.lastCompletedRequestHistory") {
+    const lastCompletedRequestHistoryLogBlock: LogBlock = {
+      ...block,
+      items: createLastCompletedRequestHistoryItems(runtime, block.maxItems)
+    };
+
+    return lastCompletedRequestHistoryLogBlock;
   }
 
   const runtimeLogBlock: LogBlock = {
@@ -342,6 +1832,11 @@ function getArchetypeCopy(archetype: ScreenArchetype) {
 
 function getScreenModeCopy(mode: RuntimeContextValue["screenMode"]) {
   switch (mode) {
+    case "processing":
+      return {
+        label: "Processing",
+        note: "Request is being assembled"
+      };
     case "task":
       return {
         label: "Task",
@@ -371,8 +1866,78 @@ function getScreenModeCopy(mode: RuntimeContextValue["screenMode"]) {
   }
 }
 
+function getNavStatusLabel(runtime: RuntimeContextValue, isListening: boolean) {
+  if (runtime.error || runtime.screenMode === "error") {
+    return "Error";
+  }
+
+  if (isListening) {
+    return "Listening";
+  }
+
+  switch (runtime.screenMode) {
+    case "processing":
+      return "Processing";
+    case "task":
+      return "In progress";
+    case "approval":
+      return "Needs decision";
+    case "stable":
+    case "result":
+    default:
+      return "Ready";
+  }
+}
+
 function formatHistoryTimestamp(timestamp: string) {
   return timestamp.slice(11, 19);
+}
+
+function formatHistoryRequestSource(source?: RuntimeContextValue["history"][number]["requestSource"]) {
+  switch (source) {
+    case "voice":
+      return "Voice";
+    case "input":
+      return "Text";
+    case "action":
+      return "Action";
+    case "form":
+      return "Form";
+    default:
+      return undefined;
+  }
+}
+
+function formatHistoryRequestId(requestId?: string) {
+  if (!requestId) {
+    return undefined;
+  }
+
+  return requestId.length > 16 ? `${requestId.slice(0, 16)}...` : requestId;
+}
+
+function formatHistoryMeta(entry: RuntimeContextValue["history"][number]) {
+  const parts = [formatHistoryTimestamp(entry.timestamp)];
+  const requestSource = formatHistoryRequestSource(entry.requestSource);
+  const requestId = formatHistoryRequestId(entry.requestId);
+
+  if (requestSource) {
+    parts.push(requestSource);
+  }
+
+  if (requestId) {
+    parts.push(requestId);
+  }
+
+  if (entry.screenMode) {
+    parts.push(entry.screenMode);
+  }
+
+  if (entry.meta) {
+    parts.push(entry.meta);
+  }
+
+  return parts.join(" · ");
 }
 
 function getHistoryRoleLabel(role: RuntimeContextValue["history"][number]["role"]) {
@@ -433,6 +1998,8 @@ function matchesHistoryFilter(entry: RuntimeContextValue["history"][number], fil
       return entry.kind === "input" || entry.kind === "form" || entry.kind === "action";
     case "workspace":
       return entry.kind === "workspace" || entry.kind === "session";
+    case "patched":
+      return entry.eventType === "screen.patched";
     case "resource":
       return entry.kind === "artifact" || entry.kind === "capability";
     case "issue":
@@ -459,7 +2026,132 @@ function countHistoryEntries(history: RuntimeContextValue["history"], filter: Hi
   return history.filter((entry) => matchesHistoryFilter(entry, filter)).length;
 }
 
-function SessionHistoryModal({ history, visible, onClose }: HistoryModalProps) {
+function createHistoryRequestGroups(
+  history: RuntimeContextValue["history"],
+  filter: HistoryFilter
+): HistoryRequestGroup[] {
+  const groups = new Map<string, HistoryRequestGroup>();
+  let ungroupedIndex = 0;
+
+  for (const entry of history) {
+    if (!matchesHistoryFilter(entry, filter)) {
+      continue;
+    }
+
+    const groupKey = entry.requestId ? `request:${entry.requestId}` : `entry:${entry.id}:${ungroupedIndex++}`;
+    const existing = groups.get(groupKey);
+
+    if (existing) {
+      existing.entries.push(entry);
+      existing.latestTimestamp = entry.timestamp;
+      existing.latestTitle = entry.title;
+      if (!existing.kinds.includes(entry.kind)) {
+        existing.kinds.push(entry.kind);
+      }
+      continue;
+    }
+
+    groups.set(groupKey, {
+      id: groupKey,
+      requestId: entry.requestId,
+      source: entry.requestSource,
+      entries: [entry],
+      latestTimestamp: entry.timestamp,
+      kinds: [entry.kind],
+      latestTitle: entry.title
+    });
+  }
+
+  return [...groups.values()].sort((left, right) => right.latestTimestamp.localeCompare(left.latestTimestamp));
+}
+
+function getHistoryGroupTitle(group: HistoryRequestGroup) {
+  const firstEntry = group.entries[0];
+
+  if (group.requestId) {
+    return group.latestTitle;
+  }
+
+  return firstEntry?.title ?? "History entry";
+}
+
+function getHistoryGroupNote(group: HistoryRequestGroup) {
+  const requestSource = formatHistoryRequestSource(group.source);
+  const requestId = formatHistoryRequestId(group.requestId);
+  const parts = [formatHistoryTimestamp(group.latestTimestamp)];
+
+  if (requestSource) {
+    parts.push(requestSource);
+  }
+
+  if (requestId) {
+    parts.push(requestId);
+  }
+
+  parts.push(`${group.entries.length} event${group.entries.length === 1 ? "" : "s"}`);
+
+  return parts.join(" · ");
+}
+
+function getHistoryGroupKinds(group: HistoryRequestGroup) {
+  return group.kinds.map((kind) => getHistoryKindLabel(kind)).join(" · ");
+}
+
+function getHistoryGroupSummary(group: HistoryRequestGroup) {
+  const summary = summarizeRequestEntries(group.entries, group.requestId);
+  const parts = [
+    `${summary.workspaceCount} workspace`,
+    `${summary.patchCount} patch`,
+    `${summary.resourceCount} resource`,
+    `${summary.issueCount} issue`
+  ];
+
+  if (summary.modePath !== "None") {
+    parts.push(summary.modePath);
+  }
+
+  return parts.join(" · ");
+}
+
+function createInteractionLockSnapshot(runtime: RuntimeContextValue): RendererInteractionLockSnapshot {
+  return {
+    input: runtime.interaction.input === "locked",
+    actions: runtime.interaction.actions === "locked",
+    forms: runtime.interaction.forms === "locked",
+    artifacts: runtime.interaction.artifacts === "locked"
+  };
+}
+
+function hasInteractionLockChanged(
+  previous: RendererInteractionLockSnapshot,
+  current: RendererInteractionLockSnapshot
+) {
+  return (
+    previous.input !== current.input ||
+    previous.actions !== current.actions ||
+    previous.forms !== current.forms ||
+    previous.artifacts !== current.artifacts
+  );
+}
+
+function createRendererTransitionSnapshot(
+  runtime: RuntimeContextValue,
+  snapshot: RenderSnapshot
+): RendererTransitionSnapshot {
+  return {
+    signature: snapshot.signature,
+    screenId: snapshot.screen?.id,
+    screenTitle: snapshot.screen?.title,
+    mode: runtime.screenMode,
+    requestId: runtime.flow.requestId,
+    flowPhase: runtime.flow.phase,
+    flowTransition: snapshot.screen?.flow?.transition,
+    interactionReason: runtime.interaction.reason,
+    interactionLocked: createInteractionLockSnapshot(runtime)
+  };
+}
+
+function SessionHistoryModal({ history, historyEnabled, visible, onClose }: HistoryModalProps) {
   const [filter, setFilter] = useState<HistoryFilter>("all");
 
   useEffect(() => {
@@ -469,8 +2161,10 @@ function SessionHistoryModal({ history, visible, onClose }: HistoryModalProps) {
   }, [visible]);
 
   const filteredHistory = history.filter((entry) => matchesHistoryFilter(entry, filter));
+  const groupedHistory = createHistoryRequestGroups(history, filter);
   const latestInput = findLatestHistoryEntry(history, "input");
   const latestWorkspace = findLatestHistoryEntry(history, "workspace");
+  const latestPatch = findLatestHistoryEntry(history, "patched");
   const historyStats = [
     {
       id: "inputs",
@@ -485,6 +2179,12 @@ function SessionHistoryModal({ history, visible, onClose }: HistoryModalProps) {
       note: latestWorkspace?.title ?? "No workspace update yet"
     },
     {
+      id: "patched",
+      label: "Patches",
+      value: String(countHistoryEntries(history, "patched")),
+      note: latestPatch?.title ?? "No incremental patch yet"
+    },
+    {
       id: "resources",
       label: "Resources",
       value: String(countHistoryEntries(history, "resource")),
@@ -495,12 +2195,19 @@ function SessionHistoryModal({ history, visible, onClose }: HistoryModalProps) {
       label: "Issues",
       value: String(countHistoryEntries(history, "issue")),
       note: countHistoryEntries(history, "issue") ? "Review failures and runtime errors" : "No recorded issues"
+    },
+    {
+      id: "requests",
+      label: "Requests",
+      value: String(createHistoryRequestGroups(history, "all").filter((group) => group.requestId).length),
+      note: historyEnabled ? "Grouped by request flow when requestId is available" : "History browsing is currently locked"
     }
   ];
   const filters: Array<{ id: HistoryFilter; label: string }> = [
     { id: "all", label: "All" },
     { id: "input", label: "Inputs" },
     { id: "workspace", label: "Workspace" },
+    { id: "patched", label: "Patched" },
     { id: "resource", label: "Resources" },
     { id: "issue", label: "Issues" }
   ];
@@ -516,9 +2223,6 @@ function SessionHistoryModal({ history, visible, onClose }: HistoryModalProps) {
             <View style={styles.navBarCenter}>
               <Text numberOfLines={1} style={styles.navBarTitle}>
                 Session history
-              </Text>
-              <Text numberOfLines={1} style={styles.navBarSubtitle}>
-                Inputs, workspace changes, resources, and failures
               </Text>
             </View>
             <View style={[styles.navBarSide, styles.navBarSideEnd]}>
@@ -569,43 +2273,71 @@ function SessionHistoryModal({ history, visible, onClose }: HistoryModalProps) {
                   <Text style={styles.statusText}>No entries for this filter yet.</Text>
                 </View>
               ) : (
-                filteredHistory.map((entry, index) => {
-                  const tone = getHistoryTone(entry.kind);
-
-                  return (
-                    <View key={entry.id} style={styles.historyTimelineRow}>
-                      <View style={styles.historyTimelineRail}>
-                        <View
-                          style={[
-                            styles.historyTimelineDot,
-                            tone === "input" ? styles.historyTimelineDotInput : null,
-                            tone === "workspace" ? styles.historyTimelineDotWorkspace : null,
-                            tone === "resource" ? styles.historyTimelineDotResource : null,
-                            tone === "issue" ? styles.historyTimelineDotIssue : null,
-                            tone === "action" ? styles.historyTimelineDotAction : null
-                          ]}
-                        />
-                        {index < filteredHistory.length - 1 ? <View style={styles.historyTimelineLine} /> : null}
-                      </View>
-                      <View style={styles.historyCard}>
-                        <View style={styles.historyCardMetaRow}>
-                          <View style={styles.historyMetaBadge}>
-                            <Text style={styles.historyMetaBadgeText}>{getHistoryRoleLabel(entry.role)}</Text>
+                <>
+                  {groupedHistory.length > 0 ? (
+                    <View style={styles.historyRequestGroupList}>
+                      {groupedHistory.map((group) => (
+                        <View key={group.id} style={styles.historyRequestGroupCard}>
+                          <View style={styles.historyRequestGroupHeader}>
+                            <Text style={styles.historyRequestGroupTitle}>{getHistoryGroupTitle(group)}</Text>
+                            {group.requestId ? (
+                              <View style={styles.historyMetaBadgeMuted}>
+                                <Text style={styles.historyMetaBadgeMutedText}>Request</Text>
+                              </View>
+                            ) : null}
                           </View>
-                          <View style={styles.historyMetaBadgeMuted}>
-                            <Text style={styles.historyMetaBadgeMutedText}>{getHistoryKindLabel(entry.kind)}</Text>
-                          </View>
-                          <Text style={styles.historyCardTime}>{formatHistoryTimestamp(entry.timestamp)}</Text>
+                          <Text style={styles.historyRequestGroupMeta}>{getHistoryGroupNote(group)}</Text>
+                          <Text style={styles.historyRequestGroupMeta}>{getHistoryGroupSummary(group)}</Text>
+                          <Text style={styles.historyRequestGroupKinds}>{getHistoryGroupKinds(group)}</Text>
                         </View>
-                        <View style={styles.historyCardHeader}>
-                          <Text style={styles.historyCardTitle}>{entry.title}</Text>
-                        </View>
-                        {entry.body ? <Text style={styles.historyCardBody}>{entry.body}</Text> : null}
-                        {entry.meta ? <Text style={styles.historyCardMetaDetail}>{entry.meta}</Text> : null}
-                      </View>
+                      ))}
                     </View>
-                  );
-                })
+                  ) : null}
+                  {filteredHistory.map((entry, index) => {
+                    const tone = getHistoryTone(entry.kind);
+
+                    return (
+                      <View key={entry.id} style={styles.historyTimelineRow}>
+                        <View style={styles.historyTimelineRail}>
+                          <View
+                            style={[
+                              styles.historyTimelineDot,
+                              tone === "input" ? styles.historyTimelineDotInput : null,
+                              tone === "workspace" ? styles.historyTimelineDotWorkspace : null,
+                              tone === "resource" ? styles.historyTimelineDotResource : null,
+                              tone === "issue" ? styles.historyTimelineDotIssue : null,
+                              tone === "action" ? styles.historyTimelineDotAction : null
+                            ]}
+                          />
+                          {index < filteredHistory.length - 1 ? <View style={styles.historyTimelineLine} /> : null}
+                        </View>
+                        <View style={styles.historyCard}>
+                          <View style={styles.historyCardMetaRow}>
+                            <View style={styles.historyMetaBadge}>
+                              <Text style={styles.historyMetaBadgeText}>{getHistoryRoleLabel(entry.role)}</Text>
+                            </View>
+                            <View style={styles.historyMetaBadgeMuted}>
+                              <Text style={styles.historyMetaBadgeMutedText}>{getHistoryKindLabel(entry.kind)}</Text>
+                            </View>
+                            {entry.requestSource ? (
+                              <View style={styles.historyMetaBadgeMuted}>
+                                <Text style={styles.historyMetaBadgeMutedText}>
+                                  {formatHistoryRequestSource(entry.requestSource)}
+                                </Text>
+                              </View>
+                            ) : null}
+                            <Text style={styles.historyCardTime}>{formatHistoryTimestamp(entry.timestamp)}</Text>
+                          </View>
+                          <View style={styles.historyCardHeader}>
+                            <Text style={styles.historyCardTitle}>{entry.title}</Text>
+                          </View>
+                          {entry.body ? <Text style={styles.historyCardBody}>{entry.body}</Text> : null}
+                          <Text style={styles.historyCardMetaDetail}>{formatHistoryMeta(entry)}</Text>
+                        </View>
+                      </View>
+                    );
+                  })}
+                </>
               )}
             </>
           )}
@@ -619,42 +2351,61 @@ function AgentRuntimeContent({
   voiceShell,
   artifactHandlers,
   capabilityHandlers,
-  renderVoiceShell
+  renderVoiceShell,
+  transitionHooks
 }: {
   voiceShell?: VoiceShellOptions;
   artifactHandlers?: ArtifactHandlers;
   capabilityHandlers?: CapabilityHandlers;
   renderVoiceShell?: (props: VoiceShellRenderProps) => ReactNode;
+  transitionHooks?: RendererTransitionHooks;
 }) {
   const runtime = useAgentRuntime();
   const screen = runtime.screen;
   const resolvedBlocks = screen ? resolveRuntimeBlocks(screen.blocks, runtime) : [];
   const clientEventLockRef = useRef(false);
+  const transitionHooksRef = useRef(transitionHooks);
+  const previousTransitionSnapshotRef = useRef<RendererTransitionSnapshot | undefined>(undefined);
+  const voiceShellConfig = resolveVoiceShellConfig(voiceShell);
   const [historyVisible, setHistoryVisible] = useState(false);
-  const [inputMode, setInputMode] = useState<"voice" | "text">("voice");
-  const [isListening, setIsListening] = useState(false);
   const [navHeight, setNavHeight] = useState(108);
-  const [showRecentInput, setShowRecentInput] = useState(true);
-  const [textValue, setTextValue] = useState("");
-  const [lastInput, setLastInput] = useState<string>();
-  const [lastInputMode, setLastInputMode] = useState<"voice" | "text">();
-  const [lastTranscript, setLastTranscript] = useState<string>();
-  const [transcriptIndex, setTranscriptIndex] = useState(0);
   const [previewArtifact, setPreviewArtifact] = useState<ArtifactPreviewState | null>(null);
   const [artifactBridgeError, setArtifactBridgeError] = useState<string>();
   const [capabilityBridgeError, setCapabilityBridgeError] = useState<string>();
   const [dismissedCapabilityIds, setDismissedCapabilityIds] = useState<string[]>([]);
-  const shellEnabled = voiceShell?.enabled ?? true;
-  const mockTranscripts = voiceShell?.mockTranscripts?.length ? voiceShell.mockTranscripts : defaultMockTranscripts;
-  const statusLabel = isListening ? voiceShell?.listeningLabel ?? "Listening" : runtime.status;
-  const promptLabel =
-    voiceShell?.promptLabel ?? "Hold to talk. Voice input is mocked until the microphone bridge is implemented.";
-  const idleLabel = voiceShell?.idleLabel ?? "Press and hold to talk";
-  const textPlaceholder = voiceShell?.textPlaceholder ?? "Type a request for the harness";
   const activeCapabilityRequest =
     runtime.capabilityRequests.find((request) => !dismissedCapabilityIds.includes(request.id)) ?? null;
-  const processingVisible = runtime.status === "thinking" || runtime.status === "running";
   const shellLocked = runtime.interaction.input === "locked";
+  const {
+    inputMode,
+    isListening,
+    lastInput,
+    lastInputMode,
+    lastTranscript,
+    promptLabel,
+    idleLabel,
+    textPlaceholder,
+    talkButtonLabel,
+    listeningButtonLabel,
+    textSubmitLabel,
+    recentInputHeadingLabel,
+    recentInputMaxLines,
+    recentInputCollapsedLabel,
+    recentInputExpandedLabel,
+    voiceModeChipLabel,
+    textModeChipLabel,
+    shellEnabled,
+    showRecentInput,
+    bottomReserve,
+    shellProps
+  } = useVoiceShellState({
+    config: voiceShellConfig,
+    runtimeStatus: runtime.status,
+    shellLocked,
+    onSubmit: submitInput
+  });
+  const processingVisible = runtime.status === "thinking" || runtime.status === "running";
+  const historyLocked = runtime.interaction.history === "locked";
   const actionsLocked = runtime.interaction.actions === "locked";
   const formsLocked = runtime.interaction.forms === "locked";
   const artifactsLocked = runtime.interaction.artifacts === "locked";
@@ -664,6 +2415,7 @@ function AgentRuntimeContent({
       runtime.interaction.actions === "enabled" ||
       runtime.interaction.forms === "enabled");
   const screenModeCopy = getScreenModeCopy(runtime.screenMode);
+  const navStatusLabel = getNavStatusLabel(runtime, isListening);
   const archetype = detectScreenArchetype(screen);
   const archetypeCopy = getArchetypeCopy(archetype);
   const rootBlockCount = screen?.blocks.length ?? 0;
@@ -684,6 +2436,11 @@ function AgentRuntimeContent({
     rootBlockCount,
     blockTypeCount
   };
+  const transitionSnapshot = createRendererTransitionSnapshot(runtime, currentSnapshot);
+
+  useEffect(() => {
+    transitionHooksRef.current = transitionHooks;
+  }, [transitionHooks]);
 
   useEffect(() => {
     if (runtime.phase === "error") {
@@ -706,12 +2463,96 @@ function AgentRuntimeContent({
     runtime.interaction.forms
   ]);
 
+  useEffect(() => {
+    const previousSnapshot = previousTransitionSnapshotRef.current;
+
+    if (!previousSnapshot) {
+      previousTransitionSnapshotRef.current = transitionSnapshot;
+      return;
+    }
+
+    const changed: RendererTransitionChange[] = [];
+    const flowChanged =
+      previousSnapshot.requestId !== transitionSnapshot.requestId ||
+      previousSnapshot.flowPhase !== transitionSnapshot.flowPhase ||
+      previousSnapshot.flowTransition !== transitionSnapshot.flowTransition;
+    const interactionLockChanged = hasInteractionLockChanged(
+      previousSnapshot.interactionLocked,
+      transitionSnapshot.interactionLocked
+    );
+
+    if (previousSnapshot.signature !== transitionSnapshot.signature) {
+      changed.push("screen");
+    }
+
+    if (previousSnapshot.mode !== transitionSnapshot.mode) {
+      changed.push("mode");
+    }
+
+    if (flowChanged) {
+      changed.push("flow");
+    }
+
+    if (interactionLockChanged) {
+      changed.push("lock");
+    }
+
+    if (changed.length > 0) {
+      transitionHooksRef.current?.onScreenTransition?.({
+        changed,
+        previous: previousSnapshot,
+        current: transitionSnapshot
+      });
+    }
+
+    if (flowChanged) {
+      transitionHooksRef.current?.onFlowChange?.({
+        previous: {
+          screenId: previousSnapshot.screenId,
+          mode: previousSnapshot.mode,
+          requestId: previousSnapshot.requestId,
+          flowPhase: previousSnapshot.flowPhase,
+          flowTransition: previousSnapshot.flowTransition
+        },
+        current: {
+          screenId: transitionSnapshot.screenId,
+          mode: transitionSnapshot.mode,
+          requestId: transitionSnapshot.requestId,
+          flowPhase: transitionSnapshot.flowPhase,
+          flowTransition: transitionSnapshot.flowTransition
+        }
+      });
+    }
+
+    if (interactionLockChanged) {
+      transitionHooksRef.current?.onInteractionLockChange?.({
+        previous: previousSnapshot.interactionLocked,
+        current: transitionSnapshot.interactionLocked,
+        screenId: transitionSnapshot.screenId,
+        requestId: transitionSnapshot.requestId,
+        flowPhase: transitionSnapshot.flowPhase,
+        reason: transitionSnapshot.interactionReason
+      });
+    }
+
+    previousTransitionSnapshotRef.current = transitionSnapshot;
+  }, [transitionSnapshot]);
+
   const contentContainerStyle: StyleProp<ViewStyle> = [
     styles.container,
     {
-      paddingTop: navHeight + 18
+      paddingTop: navHeight + 18,
+      paddingBottom: bottomReserve
     }
   ];
+  const renderShell = (overrides?: Partial<VoiceShellRenderProps>) => {
+    const nextShellProps: VoiceShellRenderProps = {
+      ...shellProps,
+      ...overrides
+    };
+
+    return renderVoiceShell ? renderVoiceShell(nextShellProps) : <DefaultVoiceShell {...nextShellProps} />;
+  };
 
   function resolveArtifact(resource: ArtifactRef) {
     return runtime.artifacts.find((artifact) => artifact.id === resource.id) ?? resource;
@@ -731,11 +2572,24 @@ function AgentRuntimeContent({
 
   function createDefaultArtifactPreview(resource: ArtifactRef): ArtifactPreviewDescriptor {
     const fields: ArtifactPreviewField[] = [];
+    const uri = resource.uri;
 
-    if (resource.uri) {
+    if ((resource.kind === "link" || resource.kind === "html") && uri) {
+      try {
+        const parsed = new URL(uri);
+        fields.push({
+          label: "Host",
+          value: parsed.host
+        });
+      } catch {
+        // Ignore URL parsing failures and fall back to the raw URI field below.
+      }
+    }
+
+    if (uri) {
       fields.push({
         label: "URI",
-        value: resource.uri
+        value: uri
       });
     }
 
@@ -754,34 +2608,74 @@ function AgentRuntimeContent({
     }
 
     return {
-      description: "Default artifact preview generated by the renderer.",
-      fields
+      title: resource.title,
+      description: getArtifactKindDescription(resource.kind),
+      fields,
+      openLabel: getArtifactOpenLabel(resource.kind)
     };
   }
 
   function createDefaultCapabilityPrompt(request: CapabilityRequest): CapabilityPromptDescriptor {
-    const fields: CapabilityPromptField[] = [];
+    const fields = createCapabilityPayloadFields(request.payload);
 
-    if (request.payload) {
-      for (const [key, value] of Object.entries(request.payload)) {
-        if (value === undefined) {
-          continue;
-        }
-
-        fields.push({
-          label: key,
-          value: typeof value === "string" ? value : JSON.stringify(value)
-        });
-      }
+    switch (request.capability) {
+      case "open-url":
+        return {
+          title: getCapabilityDisplayName(request.capability),
+          description: "The runtime can open an external link directly through the system browser.",
+          reasonLabel: "Why this link is needed",
+          primaryLabel: "Open link",
+          secondaryLabel: "Cancel",
+          fields
+        };
+      case "share":
+        return {
+          title: getCapabilityDisplayName(request.capability),
+          description: "The runtime can forward text or URLs into the native share sheet.",
+          reasonLabel: "Why sharing is needed",
+          primaryLabel: "Open share sheet",
+          secondaryLabel: "Cancel",
+          fields
+        };
+      case "file-picker":
+        return {
+          title: getCapabilityDisplayName(request.capability),
+          description: "The harness is asking the client to pick a local file and return it through the bridge.",
+          reasonLabel: "Reason",
+          primaryLabel: "Continue",
+          secondaryLabel: "Not now",
+          fields
+        };
+      case "location":
+        return {
+          title: getCapabilityDisplayName(request.capability),
+          description: "The harness is asking for location context from the device bridge.",
+          reasonLabel: "Reason",
+          primaryLabel: "Allow access",
+          secondaryLabel: "Not now",
+          fields
+        };
+      case "camera":
+      case "photo-library":
+      case "microphone":
+        return {
+          title: getCapabilityDisplayName(request.capability),
+          description: "The harness is asking the client runtime to resolve a device-level permission or capture action.",
+          reasonLabel: "Reason",
+          primaryLabel: "Allow access",
+          secondaryLabel: "Not now",
+          fields
+        };
+      default:
+        return {
+          title: getCapabilityDisplayName(request.capability),
+          description: "The harness is asking the client runtime to resolve a device-level permission or system action.",
+          reasonLabel: "Reason",
+          primaryLabel: "Allow mock resolution",
+          secondaryLabel: "Not now",
+          fields
+        };
     }
-
-    return {
-      description: "The harness is asking the client runtime to resolve a device-level permission or system action.",
-      reasonLabel: "Reason",
-      primaryLabel: "Allow mock resolution",
-      secondaryLabel: "Not now",
-      fields
-    };
   }
 
   async function openArtifactWithSystem(resource: ArtifactRef) {
@@ -792,17 +2686,68 @@ function AgentRuntimeContent({
     await Linking.openURL(resource.uri);
   }
 
+  async function shareArtifactWithSystem(resource: ArtifactRef) {
+    if (!canShareArtifact(resource) || !resource.uri) {
+      throw new Error("This artifact cannot be shared yet.");
+    }
+
+    await Share.share({
+      title: resource.title,
+      message: resource.uri
+    });
+  }
+
+  async function downloadArtifactWithSystem(resource: ArtifactRef) {
+    if (!canDownloadArtifact(resource) || !resource.uri) {
+      throw new Error("This artifact cannot be downloaded yet.");
+    }
+
+    await Linking.openURL(resource.uri);
+  }
+
   async function openArtifact(resource: ArtifactRef) {
     const handler = getArtifactHandler(resource);
 
     if (handler?.open) {
       await handler.open(resource, {
-        openWithSystem: () => openArtifactWithSystem(resource)
+        openWithSystem: () => openArtifactWithSystem(resource),
+        shareWithSystem: () => shareArtifactWithSystem(resource),
+        downloadWithSystem: () => downloadArtifactWithSystem(resource)
       });
       return;
     }
 
     await openArtifactWithSystem(resource);
+  }
+
+  async function shareArtifact(resource: ArtifactRef) {
+    const handler = getArtifactHandler(resource);
+
+    if (handler?.share) {
+      await handler.share(resource, {
+        openWithSystem: () => openArtifactWithSystem(resource),
+        shareWithSystem: () => shareArtifactWithSystem(resource),
+        downloadWithSystem: () => downloadArtifactWithSystem(resource)
+      });
+      return;
+    }
+
+    await shareArtifactWithSystem(resource);
+  }
+
+  async function downloadArtifact(resource: ArtifactRef) {
+    const handler = getArtifactHandler(resource);
+
+    if (handler?.download) {
+      await handler.download(resource, {
+        openWithSystem: () => openArtifactWithSystem(resource),
+        shareWithSystem: () => shareArtifactWithSystem(resource),
+        downloadWithSystem: () => downloadArtifactWithSystem(resource)
+      });
+      return;
+    }
+
+    await downloadArtifactWithSystem(resource);
   }
 
   async function previewArtifactResource(resource: ArtifactRef) {
@@ -814,7 +2759,58 @@ function AgentRuntimeContent({
     });
   }
 
-  async function handleArtifactRequest(resource: ArtifactRef, mode: "preview" | "open") {
+  async function resolveCapabilityWithDefaultBridge(request: CapabilityRequest) {
+    if (request.capability === "open-url") {
+      const url =
+        typeof request.payload?.url === "string"
+          ? request.payload.url
+          : typeof request.payload?.uri === "string"
+            ? request.payload.uri
+            : undefined;
+
+      if (!url) {
+        throw new Error("The capability payload must include a url or uri for open-url.");
+      }
+
+      await Linking.openURL(url);
+      return {
+        payload: {
+          bridge: "renderer-default",
+          opened: true,
+          url
+        }
+      };
+    }
+
+    if (request.capability === "share") {
+      const title = typeof request.payload?.title === "string" ? request.payload.title : undefined;
+      const message = typeof request.payload?.message === "string" ? request.payload.message : undefined;
+      const url = typeof request.payload?.url === "string" ? request.payload.url : undefined;
+      const composedMessage = [message, url].filter(Boolean).join("\n");
+
+      if (!title && !message && !url) {
+        throw new Error("The capability payload must include title, message, or url for share.");
+      }
+
+      await Share.share({
+        title,
+        message: composedMessage || title || url || ""
+      });
+
+      return {
+        payload: {
+          bridge: "renderer-default",
+          shared: true,
+          title,
+          url
+        }
+      };
+    }
+
+    return undefined;
+  }
+
+  async function handleArtifactRequest(resource: ArtifactRef, mode: "preview" | "open" | "share" | "download") {
     if (artifactsLocked) {
       return;
     }
@@ -825,8 +2821,12 @@ function AgentRuntimeContent({
     try {
       if (mode === "preview") {
         await previewArtifactResource(artifact);
-      } else {
+      } else if (mode === "open") {
         await openArtifact(artifact);
+      } else if (mode === "share") {
+        await shareArtifact(artifact);
+      } else {
+        await downloadArtifact(artifact);
       }
     } catch (error) {
       setArtifactBridgeError(error instanceof Error ? error.message : "Failed to resolve the artifact bridge.");
@@ -844,7 +2844,9 @@ function AgentRuntimeContent({
     setCapabilityBridgeError(undefined);
 
     try {
-      const handlerResult = await getCapabilityHandler(request)?.resolve?.(request, granted);
+      const handlerResult = granted
+        ? await (getCapabilityHandler(request)?.resolve?.(request, granted) ?? resolveCapabilityWithDefaultBridge(request))
+        : await getCapabilityHandler(request)?.resolve?.(request, granted);
 
       await runtime.sendClientEvent({
         type: "capability.resolved",
@@ -885,87 +2887,6 @@ function AgentRuntimeContent({
       text: value
     });
   }
-
-  async function handleVoiceCommit() {
-    if (!shellEnabled || shellLocked || !isListening) {
-      return;
-    }
-
-    setIsListening(false);
-
-    const transcript = mockTranscripts[transcriptIndex % mockTranscripts.length];
-    setTranscriptIndex((value) => value + 1);
-    setLastTranscript(transcript);
-    setLastInput(transcript);
-    setLastInputMode("voice");
-
-    await submitInput("voice", transcript);
-  }
-
-  async function handleTextSubmit() {
-    if (!shellEnabled || shellLocked) {
-      return;
-    }
-
-    const nextText = textValue.trim();
-
-    if (!nextText) {
-      return;
-    }
-
-    setLastInput(nextText);
-    setLastInputMode("text");
-    setTextValue("");
-    await submitInput("text", nextText);
-  }
-
-  const shellProps: VoiceShellRenderProps = {
-    disabled: !shellEnabled || shellLocked,
-    inputMode,
-    isListening,
-    statusLabel,
-    promptLabel,
-    actionLabel: isListening ? voiceShell?.listeningLabel ?? "Release to send" : idleLabel,
-    secondaryActionLabel: inputMode === "voice" ? "Type instead" : "Use voice",
-    textValue,
-    textPlaceholder,
-    submitDisabled: !textValue.trim(),
-    lastTranscript,
-    lastInput,
-    lastInputMode,
-    showRecentInput,
-    onPressIn: () => {
-      if (!shellEnabled || shellLocked || inputMode !== "voice") {
-        return;
-      }
-
-      setIsListening(true);
-    },
-    onPressOut: () => {
-      if (inputMode !== "voice") {
-        return;
-      }
-
-      void handleVoiceCommit();
-    },
-    onToggleInputMode: () => {
-      if (shellLocked) {
-        return;
-      }
-
-      setIsListening(false);
-      setInputMode((value) => (value === "voice" ? "text" : "voice"));
-    },
-    onToggleRecentInput: () => {
-      setShowRecentInput((value) => !value);
-    },
-    onChangeText: (value) => {
-      setTextValue(value);
-    },
-    onSubmitText: () => {
-      void handleTextSubmit();
-    }
-  };
 
   function renderScreenSurface(snapshot: RenderSnapshot) {
     const screenModeCopy = getScreenModeCopy(snapshot.screenMode);
@@ -1113,28 +3034,22 @@ function AgentRuntimeContent({
         <View style={styles.centered}>
           <Text style={styles.statusText}>Connecting runtime...</Text>
         </View>
-        <DefaultVoiceShell
-          disabled
-          inputMode="voice"
-          isListening={false}
-          statusLabel="connecting"
-          promptLabel={promptLabel}
-          actionLabel={idleLabel}
-          secondaryActionLabel="Type instead"
-          textValue=""
-          textPlaceholder={textPlaceholder}
-          submitDisabled
-          lastTranscript={lastTranscript}
-          lastInput={lastInput}
-          lastInputMode={lastInputMode}
-          showRecentInput={showRecentInput}
-          onPressIn={() => undefined}
-          onPressOut={() => undefined}
-          onToggleInputMode={() => undefined}
-          onToggleRecentInput={() => undefined}
-          onChangeText={() => undefined}
-          onSubmitText={() => undefined}
-        />
+        {renderShell({
+          disabled: true,
+          inputMode: "voice",
+          isListening: false,
+          statusLabel: "connecting",
+          actionLabel: idleLabel,
+          secondaryActionLabel: "Type instead",
+          textValue: "",
+          submitDisabled: true,
+          onPressIn: () => undefined,
+          onPressOut: () => undefined,
+          onToggleInputMode: () => undefined,
+          onToggleRecentInput: () => undefined,
+          onChangeText: () => undefined,
+          onSubmitText: () => undefined
+        })}
       </View>
     );
   }
@@ -1145,28 +3060,22 @@ function AgentRuntimeContent({
         <View style={styles.centered}>
           <Text style={styles.errorText}>{runtime.error ?? "Runtime error"}</Text>
         </View>
-        <DefaultVoiceShell
-          disabled
-          inputMode="voice"
-          isListening={false}
-          statusLabel="error"
-          promptLabel={promptLabel}
-          actionLabel={idleLabel}
-          secondaryActionLabel="Type instead"
-          textValue=""
-          textPlaceholder={textPlaceholder}
-          submitDisabled
-          lastTranscript={lastTranscript}
-          lastInput={lastInput}
-          lastInputMode={lastInputMode}
-          showRecentInput={showRecentInput}
-          onPressIn={() => undefined}
-          onPressOut={() => undefined}
-          onToggleInputMode={() => undefined}
-          onToggleRecentInput={() => undefined}
-          onChangeText={() => undefined}
-          onSubmitText={() => undefined}
-        />
+        {renderShell({
+          disabled: true,
+          inputMode: "voice",
+          isListening: false,
+          statusLabel: "error",
+          actionLabel: idleLabel,
+          secondaryActionLabel: "Type instead",
+          textValue: "",
+          submitDisabled: true,
+          onPressIn: () => undefined,
+          onPressOut: () => undefined,
+          onToggleInputMode: () => undefined,
+          onToggleRecentInput: () => undefined,
+          onChangeText: () => undefined,
+          onSubmitText: () => undefined
+        })}
       </View>
     );
   }
@@ -1183,25 +3092,28 @@ function AgentRuntimeContent({
         }}
       >
         <View style={styles.navBar}>
-          <View style={[styles.navBarSide, styles.navBarSideStart]}>
-            <View style={[styles.statusBadge, processingVisible ? styles.statusBadgeActive : null]}>
-              <Text style={[styles.statusBadgeText, processingVisible ? styles.statusBadgeTextActive : null]}>
-                {screenModeCopy.label} · {statusLabel}
-              </Text>
+            <View style={[styles.navBarSide, styles.navBarSideStart]}>
+              <View style={[styles.statusBadge, processingVisible ? styles.statusBadgeActive : null]}>
+                <Text style={[styles.statusBadgeText, processingVisible ? styles.statusBadgeTextActive : null]}>
+                  {navStatusLabel}
+                </Text>
+              </View>
             </View>
-          </View>
           <View style={styles.navBarCenter}>
             <Text numberOfLines={1} style={styles.navBarTitle}>
               {screen?.title ?? "Workspace"}
             </Text>
-            <Text numberOfLines={1} style={styles.navBarSubtitle}>
-              {screen?.subtitle ?? archetypeCopy.metric}
-            </Text>
           </View>
           <View style={[styles.navBarSide, styles.navBarSideEnd]}>
             {processingVisible ? <View style={styles.navProcessingPill}><View style={styles.navProcessingDot} /></View> : null}
-            <Pressable style={styles.historyButton} onPress={() => setHistoryVisible(true)}>
-              <Text style={styles.historyButtonText}>History</Text>
+            <Pressable
+              disabled={historyLocked}
+              style={[styles.historyButton, historyLocked ? styles.historyButtonDisabled : null]}
+              onPress={() => setHistoryVisible(true)}
+            >
+              <Text style={[styles.historyButtonText, historyLocked ? styles.historyButtonTextDisabled : null]}>
+                History
+              </Text>
             </Pressable>
           </View>
         </View>
@@ -1211,13 +3123,23 @@ function AgentRuntimeContent({
           {renderScreenSurface(currentSnapshot)}
         </ScrollView>
       </View>
-      {renderVoiceShell ? renderVoiceShell(shellProps) : <DefaultVoiceShell {...shellProps} />}
+      {renderShell()}
       <ArtifactPreviewModal
         preview={previewArtifact}
         onClose={() => setPreviewArtifact(null)}
         onOpen={(artifact) => {
           void openArtifact(artifact).catch((error) => {
             setArtifactBridgeError(error instanceof Error ? error.message : "Failed to open the artifact.");
+          });
+        }}
+        onShare={(artifact) => {
+          void shareArtifact(artifact).catch((error) => {
+            setArtifactBridgeError(error instanceof Error ? error.message : "Failed to share the artifact.");
+          });
+        }}
+        onDownload={(artifact) => {
+          void downloadArtifact(artifact).catch((error) => {
+            setArtifactBridgeError(error instanceof Error ? error.message : "Failed to download the artifact.");
           });
         }}
       />
@@ -1234,7 +3156,12 @@ function AgentRuntimeContent({
           void resolveCapabilityRequest(request, false);
         }}
       />
-      <SessionHistoryModal history={runtime.history} visible={historyVisible} onClose={() => setHistoryVisible(false)} />
+      <SessionHistoryModal
+        history={runtime.history}
+        historyEnabled={!historyLocked}
+        visible={historyVisible}
+        onClose={() => setHistoryVisible(false)}
+      />
     </View>
   );
 }
@@ -1250,9 +3177,18 @@ function DefaultVoiceShell({
   textValue,
   textPlaceholder,
   submitDisabled,
+  talkButtonLabel,
+  listeningButtonLabel,
+  textSubmitLabel,
   lastTranscript,
   lastInput,
   lastInputMode,
+  recentInputHeadingLabel,
+  recentInputMaxLines,
+  recentInputCollapsedLabel,
+  recentInputExpandedLabel,
+  voiceModeChipLabel,
+  textModeChipLabel,
   showRecentInput,
   onPressIn,
   onPressOut,
@@ -1265,19 +3201,90 @@ function DefaultVoiceShell({
   void promptLabel;
   const recentInput = lastInput ?? lastTranscript;
   const recentInputMode = lastInput ? lastInputMode : lastTranscript ? "voice" : undefined;
-  const fabLabel = isListening ? "Send" : actionLabel.includes("talk") ? "Talk" : actionLabel;
-  const toggleLabel = secondaryActionLabel.includes("voice") ? "MIC" : "TXT";
-  const recentToggleLabel = recentInput ? "LAST" : "OPEN";
+  const fabLabel = isListening ? listeningButtonLabel : talkButtonLabel;
+  const toggleLabel = inputMode === "voice" ? textModeChipLabel : voiceModeChipLabel;
+  const recentToggleLabel = showRecentInput ? recentInputExpandedLabel : recentInput ? recentInputCollapsedLabel : "OPEN";
+  const [recentMounted, setRecentMounted] = useState(Boolean(recentInput && showRecentInput));
+  const recentOpacity = useRef(new Animated.Value(recentInput && showRecentInput ? 1 : 0)).current;
+  const recentTranslateY = useRef(new Animated.Value(recentInput && showRecentInput ? 0 : 10)).current;
+
+  useEffect(() => {
+    if (recentInput && showRecentInput) {
+      setRecentMounted(true);
+      recentOpacity.stopAnimation();
+      recentTranslateY.stopAnimation();
+      recentOpacity.setValue(0);
+      recentTranslateY.setValue(10);
+
+      Animated.parallel([
+        Animated.timing(recentOpacity, {
+          toValue: 1,
+          duration: 180,
+          easing: Easing.out(Easing.quad),
+          useNativeDriver: true
+        }),
+        Animated.timing(recentTranslateY, {
+          toValue: 0,
+          duration: 220,
+          easing: Easing.out(Easing.cubic),
+          useNativeDriver: true
+        })
+      ]).start();
+      return;
+    }
+
+    if (!recentMounted) {
+      return;
+    }
+
+    recentOpacity.stopAnimation();
+    recentTranslateY.stopAnimation();
+
+    Animated.parallel([
+      Animated.timing(recentOpacity, {
+        toValue: 0,
+        duration: 140,
+        easing: Easing.in(Easing.quad),
+        useNativeDriver: true
+      }),
+      Animated.timing(recentTranslateY, {
+        toValue: 8,
+        duration: 160,
+        easing: Easing.in(Easing.cubic),
+        useNativeDriver: true
+      })
+    ]).start(({ finished }) => {
+      if (finished) {
+        setRecentMounted(false);
+      }
+    });
+  }, [
+    recentInput,
+    recentMounted,
+    recentOpacity,
+    recentTranslateY,
+    showRecentInput
+  ]);
 
   return (
     <View pointerEvents="box-none" style={styles.shellLayer}>
-      {recentInput && showRecentInput ? (
-        <View style={styles.shellStatusCluster}>
+      {recentInput && recentMounted ? (
+        <Animated.View
+          style={[
+            styles.shellStatusCluster,
+            {
+              opacity: recentOpacity,
+              transform: [{ translateY: recentTranslateY }]
+            }
+          ]}
+        >
           <View style={styles.shellEchoCard}>
-            <Text style={styles.shellEchoLabel}>Last {recentInputMode ?? "input"}</Text>
-            <Text numberOfLines={2} style={styles.shellEchoText}>{recentInput}</Text>
+            <Text style={styles.shellEchoLabel}>
+              {recentInputHeadingLabel} {recentInputMode ?? "input"}
+            </Text>
+            <Text numberOfLines={recentInputMaxLines} style={styles.shellEchoText}>{recentInput}</Text>
           </View>
-        </View>
+        </Animated.View>
       ) : null}
       {inputMode === "text" ? (
         <View style={styles.textComposerDock}>
@@ -1309,7 +3316,7 @@ function DefaultVoiceShell({
                   (disabled || submitDisabled) ? styles.voiceButtonDisabled : null
                 ]}
               >
-                <Text style={styles.sendFabLabel}>Send</Text>
+                <Text style={styles.sendFabLabel}>{textSubmitLabel}</Text>
               </Pressable>
             </View>
           </View>
@@ -1342,9 +3349,86 @@ interface ArtifactPreviewModalProps {
   preview: ArtifactPreviewState | null;
   onClose(): void;
   onOpen(artifact: ArtifactRef): void;
+  onShare(artifact: ArtifactRef): void;
+  onDownload(artifact: ArtifactRef): void;
 }
 
-function ArtifactPreviewModal({ preview, onClose, onOpen }: ArtifactPreviewModalProps) {
+function BottomSheetModal({
+  visible,
+  onRequestClose,
+  children
+}: {
+  visible: boolean;
+  onRequestClose(): void;
+  children: ReactNode;
+}) {
+  const [mounted, setMounted] = useState(visible);
+  const backdropOpacity = useRef(new Animated.Value(visible ? 1 : 0)).current;
+  const sheetTranslateY = useRef(new Animated.Value(visible ? 0 : 42)).current;
+
+  useEffect(() => {
+    if (visible) {
+      setMounted(true);
+    }
+
+    const animation = Animated.parallel([
+      Animated.timing(backdropOpacity, {
+        toValue: visible ? 1 : 0,
+        duration: visible ? 180 : 140,
+        easing: visible ? Easing.out(Easing.quad) : Easing.in(Easing.quad),
+        useNativeDriver: true
+      }),
+      Animated.timing(sheetTranslateY, {
+        toValue: visible ? 0 : 42,
+        duration: visible ? 240 : 180,
+        easing: visible ? Easing.out(Easing.cubic) : Easing.in(Easing.cubic),
+        useNativeDriver: true
+      })
+    ]);
+
+    animation.start(({ finished }) => {
+      if (finished && !visible) {
+        setMounted(false);
+      }
+    });
+
+    return () => {
+      animation.stop();
+    };
+  }, [backdropOpacity, sheetTranslateY, visible]);
+
+  if (!mounted) {
+    return null;
+  }
+
+  return (
+    <Modal animationType="none" transparent visible={mounted} onRequestClose={onRequestClose}>
+      <View style={styles.modalRoot}>
+        <Animated.View
+          pointerEvents={visible ? "auto" : "none"}
+          style={[styles.modalBackdrop, { opacity: backdropOpacity }]}
+        >
+          <Pressable style={styles.modalBackdropDismissArea} onPress={onRequestClose} />
+        </Animated.View>
+        <Animated.View
+          style={[
+            styles.modalSheetWrap,
+            {
+              transform: [{ translateY: sheetTranslateY }]
+            }
+          ]}
+        >
+          <View style={styles.modalSheet}>
+            <View style={styles.modalHandle} />
+            {children}
+          </View>
+        </Animated.View>
+      </View>
+    </Modal>
+  );
+}
+
+function ArtifactPreviewModal({ preview, onClose, onOpen, onShare, onDownload }: ArtifactPreviewModalProps) {
   const artifact = preview?.artifact ?? null;
   const fields = preview?.preview.fields?.length
     ? preview.preview.fields
@@ -1353,37 +3437,42 @@ function ArtifactPreviewModal({ preview, onClose, onOpen }: ArtifactPreviewModal
       : [];
 
   return (
-    <Modal animationType="slide" transparent visible={Boolean(preview)} onRequestClose={onClose}>
-      <View style={styles.modalBackdrop}>
-        <View style={styles.modalSheet}>
-          <View style={styles.modalHandle} />
-          <View style={styles.modalCard}>
-          <Text style={styles.modalEyebrow}>Artifact preview</Text>
-          <Text style={styles.modalTitle}>{preview?.preview.title ?? artifact?.title ?? artifact?.id ?? "Artifact"}</Text>
-          <Text style={styles.modalMeta}>
-            Kind: {artifact?.kind ?? "-"} · Source: {artifact?.source ?? "-"}
-          </Text>
-          {preview?.preview.description ? <Text style={styles.modalMeta}>{preview.preview.description}</Text> : null}
-          {fields.map((field) => (
-            <View key={`${field.label}-${field.value}`} style={styles.modalPreviewSurface}>
-              <Text style={styles.modalPreviewLabel}>{field.label}</Text>
-              <Text style={styles.modalPreviewText}>{field.value}</Text>
-            </View>
-          ))}
-          <View style={styles.modalActions}>
-            <Pressable style={styles.secondaryActionButton} onPress={onClose}>
-              <Text style={styles.secondaryActionText}>Close</Text>
+    <BottomSheetModal visible={Boolean(preview)} onRequestClose={onClose}>
+      <View style={styles.modalCard}>
+        <Text style={styles.modalEyebrow}>Artifact preview</Text>
+        <Text style={styles.modalTitle}>{preview?.preview.title ?? artifact?.title ?? artifact?.id ?? "Artifact"}</Text>
+        <Text style={styles.modalMeta}>
+          Kind: {artifact?.kind ?? "-"} · Source: {artifact?.source ?? "-"}
+        </Text>
+        {preview?.preview.description ? <Text style={styles.modalMeta}>{preview.preview.description}</Text> : null}
+        {fields.map((field) => (
+          <View key={`${field.label}-${field.value}`} style={styles.modalPreviewSurface}>
+            <Text style={styles.modalPreviewLabel}>{field.label}</Text>
+            <Text style={styles.modalPreviewText}>{field.value}</Text>
+          </View>
+        ))}
+        <View style={styles.modalActions}>
+          <Pressable style={styles.secondaryActionButton} onPress={onClose}>
+            <Text style={styles.secondaryActionText}>Close</Text>
+          </Pressable>
+          {artifact?.uri ? (
+            <Pressable style={styles.secondaryActionButton} onPress={() => onShare(artifact)}>
+              <Text style={styles.secondaryActionText}>Share</Text>
             </Pressable>
-            {artifact?.openable !== false && artifact?.uri ? (
-              <Pressable style={styles.actionButton} onPress={() => onOpen(artifact)}>
-                <Text style={styles.actionButtonText}>{preview?.preview.openLabel ?? "Open in system"}</Text>
-              </Pressable>
-            ) : null}
-          </View>
-          </View>
+          ) : null}
+          {artifact && canDownloadArtifact(artifact) ? (
+            <Pressable style={styles.secondaryActionButton} onPress={() => onDownload(artifact)}>
+              <Text style={styles.secondaryActionText}>Download</Text>
+            </Pressable>
+          ) : null}
+          {artifact?.openable !== false && artifact?.uri ? (
+            <Pressable style={styles.actionButton} onPress={() => onOpen(artifact)}>
+              <Text style={styles.actionButtonText}>{preview?.preview.openLabel ?? "Open in system"}</Text>
+            </Pressable>
+          ) : null}
         </View>
       </View>
-    </Modal>
+    </BottomSheetModal>
   );
 }
 
@@ -1460,43 +3549,38 @@ function CapabilityRequestModal({ prompt, overridePrompt, onApprove, onDeny }: C
   const activePrompt = resolvedPrompt?.prompt;
 
   return (
-    <Modal animationType="slide" transparent visible={Boolean(request)} onRequestClose={() => request && onDeny(request)}>
-      <View style={styles.modalBackdrop}>
-        <View style={styles.modalSheet}>
-          <View style={styles.modalHandle} />
-          <View style={styles.capabilityCard}>
-          <Text style={styles.modalEyebrow}>Capability request</Text>
-          <Text style={styles.modalTitle}>{request?.capability ?? "Device capability"}</Text>
-          {activePrompt?.title ? <Text style={styles.modalMetaStrong}>{activePrompt.title}</Text> : null}
-          <Text style={styles.modalMeta}>
-            {activePrompt?.description ?? "The harness is asking the client runtime to resolve a device-level permission or system action."}
-          </Text>
-          <View style={styles.modalPreviewSurface}>
-            <Text style={styles.modalPreviewLabel}>{activePrompt?.reasonLabel ?? "Reason"}</Text>
-            <Text style={styles.modalPreviewText}>{request?.reason ?? "No reason provided."}</Text>
+    <BottomSheetModal visible={Boolean(request)} onRequestClose={() => request && onDeny(request)}>
+      <View style={styles.capabilityCard}>
+        <Text style={styles.modalEyebrow}>Capability request</Text>
+        <Text style={styles.modalTitle}>{request?.capability ?? "Device capability"}</Text>
+        {activePrompt?.title ? <Text style={styles.modalMetaStrong}>{activePrompt.title}</Text> : null}
+        <Text style={styles.modalMeta}>
+          {activePrompt?.description ?? "The harness is asking the client runtime to resolve a device-level permission or system action."}
+        </Text>
+        <View style={styles.modalPreviewSurface}>
+          <Text style={styles.modalPreviewLabel}>{activePrompt?.reasonLabel ?? "Reason"}</Text>
+          <Text style={styles.modalPreviewText}>{request?.reason ?? "No reason provided."}</Text>
+        </View>
+        {activePrompt?.fields?.map((field) => (
+          <View key={`${field.label}-${field.value}`} style={styles.modalPreviewSurface}>
+            <Text style={styles.modalPreviewLabel}>{field.label}</Text>
+            <Text style={styles.modalPreviewText}>{field.value}</Text>
           </View>
-          {activePrompt?.fields?.map((field) => (
-            <View key={`${field.label}-${field.value}`} style={styles.modalPreviewSurface}>
-              <Text style={styles.modalPreviewLabel}>{field.label}</Text>
-              <Text style={styles.modalPreviewText}>{field.value}</Text>
-            </View>
-          ))}
-          <View style={styles.modalActions}>
-            {request ? (
-              <Pressable style={styles.secondaryActionButton} onPress={() => onDeny(request)}>
-                <Text style={styles.secondaryActionText}>{activePrompt?.secondaryLabel ?? "Not now"}</Text>
-              </Pressable>
-            ) : null}
-            {request ? (
-              <Pressable style={styles.actionButton} onPress={() => onApprove(request)}>
-                <Text style={styles.actionButtonText}>{activePrompt?.primaryLabel ?? "Allow mock resolution"}</Text>
-              </Pressable>
-            ) : null}
-          </View>
-          </View>
+        ))}
+        <View style={styles.modalActions}>
+          {request ? (
+            <Pressable style={styles.secondaryActionButton} onPress={() => onDeny(request)}>
+              <Text style={styles.secondaryActionText}>{activePrompt?.secondaryLabel ?? "Not now"}</Text>
+            </Pressable>
+          ) : null}
+          {request ? (
+            <Pressable style={styles.actionButton} onPress={() => onApprove(request)}>
+              <Text style={styles.actionButtonText}>{activePrompt?.primaryLabel ?? "Allow mock resolution"}</Text>
+            </Pressable>
+          ) : null}
         </View>
       </View>
-    </Modal>
+    </BottomSheetModal>
   );
 }
 
@@ -1506,6 +3590,7 @@ export function AgentRuntimeView({
   artifactHandlers,
   capabilityHandlers,
   renderVoiceShell,
+  transitionHooks,
   runtimeOptions
 }: AgentRuntimeViewProps) {
   return (
@@ -1515,6 +3600,7 @@ export function AgentRuntimeView({
         artifactHandlers={artifactHandlers}
         capabilityHandlers={capabilityHandlers}
         renderVoiceShell={renderVoiceShell}
+        transitionHooks={transitionHooks}
       />
     </AgentRuntimeProvider>
   );
@@ -1583,11 +3669,6 @@ const styles = StyleSheet.create({
     color: "#0F172A",
     fontSize: 15,
     fontWeight: "700"
-  },
-  navBarSubtitle: {
-    color: "#64748B",
-    fontSize: 11,
-    fontWeight: "600"
   },
   centered: {
     flex: 1,
@@ -1728,10 +3809,17 @@ const styles = StyleSheet.create({
     borderWidth: 1,
     borderColor: "#D8E3F0"
   },
+  historyButtonDisabled: {
+    backgroundColor: "rgba(255, 255, 255, 0.72)",
+    borderColor: "rgba(216, 227, 240, 0.7)"
+  },
   historyButtonText: {
     color: "#0A84FF",
     fontSize: 11,
     fontWeight: "700"
+  },
+  historyButtonTextDisabled: {
+    color: "#94A3B8"
   },
   historyNavChrome: {
     paddingTop: 8,
@@ -1869,6 +3957,41 @@ const styles = StyleSheet.create({
     color: "#64748B",
     fontSize: 12,
     lineHeight: 18
+  },
+  historyRequestGroupList: {
+    gap: 10
+  },
+  historyRequestGroupCard: {
+    padding: 16,
+    borderRadius: 18,
+    backgroundColor: "rgba(255, 255, 255, 0.78)",
+    borderWidth: 1,
+    borderColor: "rgba(216, 227, 240, 0.88)",
+    gap: 6
+  },
+  historyRequestGroupHeader: {
+    flexDirection: "row",
+    alignItems: "center",
+    justifyContent: "space-between",
+    gap: 12
+  },
+  historyRequestGroupTitle: {
+    flex: 1,
+    color: "#0F172A",
+    fontSize: 14,
+    fontWeight: "700"
+  },
+  historyRequestGroupMeta: {
+    color: "#475569",
+    fontSize: 12,
+    lineHeight: 18
+  },
+  historyRequestGroupKinds: {
+    color: "#64748B",
+    fontSize: 11,
+    fontWeight: "600",
+    lineHeight: 16,
+    textTransform: "uppercase"
   },
   historyFilterRow: {
     gap: 8,
@@ -2048,25 +4171,35 @@ const styles = StyleSheet.create({
     position: "absolute",
     left: 0,
     right: 0,
-    bottom: 18,
+    bottom: 20,
     paddingHorizontal: 16,
     alignItems: "center",
-    gap: 10
+    gap: 12
   },
   shellStatusCluster: {
+    width: "100%",
     alignItems: "center",
-    gap: 6,
+    gap: 8,
     maxWidth: 320
   },
   shellEchoCard: {
-    maxWidth: 320,
-    borderRadius: 18,
-    paddingHorizontal: 14,
-    paddingVertical: 10,
-    backgroundColor: "rgba(255, 255, 255, 0.94)",
+    width: "100%",
+    maxWidth: 304,
+    borderRadius: 20,
+    paddingHorizontal: 15,
+    paddingVertical: 11,
+    backgroundColor: "rgba(255, 255, 255, 0.96)",
     borderWidth: 1,
-    borderColor: "rgba(214, 224, 236, 0.84)",
-    gap: 4
+    borderColor: "rgba(214, 224, 236, 0.92)",
+    gap: 5,
+    shadowColor: "#0F172A",
+    shadowOpacity: 0.08,
+    shadowRadius: 16,
+    shadowOffset: {
+      width: 0,
+      height: 8
+    },
+    elevation: 8
   },
   shellEchoLabel: {
     color: "#64748B",
@@ -2077,7 +4210,7 @@ const styles = StyleSheet.create({
   shellEchoText: {
     color: "#0F172A",
     fontSize: 13,
-    lineHeight: 19
+    lineHeight: 18
   },
   fabDock: {
     position: "relative",
@@ -2227,10 +4360,23 @@ const styles = StyleSheet.create({
     fontSize: 14,
     fontWeight: "600"
   },
-  modalBackdrop: {
+  modalRoot: {
     flex: 1,
-    justifyContent: "flex-end",
+    justifyContent: "flex-end"
+  },
+  modalBackdrop: {
+    position: "absolute",
+    top: 0,
+    right: 0,
+    bottom: 0,
+    left: 0,
     backgroundColor: "rgba(15, 23, 42, 0.28)"
+  },
+  modalBackdropDismissArea: {
+    flex: 1
+  },
+  modalSheetWrap: {
+    justifyContent: "flex-end"
   },
   modalSheet: {
     borderTopLeftRadius: 28,

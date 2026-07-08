@@ -12,6 +12,8 @@ This document defines the current protocol surface between a harness and the `un
 - Support local, remote, and hybrid harnesses.
 - Drive UI through constrained schema blocks instead of arbitrary components.
 - Treat artifacts and device capabilities as first-class concepts.
+- Make request lifecycle and page transitions explicit enough for runtime control.
+- Preserve enough request metadata for runtime inspection and verification.
 
 ## Harness Events
 
@@ -95,6 +97,8 @@ Applies incremental updates to the current screen when the `screenId` matches.
 }
 ```
 
+Use `screen.patched` when a request is still evolving inside the same workspace and only part of the UI needs to change. The current demo baseline uses this for incremental timeline progression and request-level verification.
+
 ### `artifact.available`
 
 Declares an artifact that can be previewed or opened.
@@ -171,7 +175,8 @@ Submits transcript text with an optional audio URI.
 {
   "type": "voice.input",
   "transcript": "Book a table for tomorrow",
-  "audioUri": "file:///local/session/voice.m4a"
+  "audioUri": "file:///local/session/voice.m4a",
+  "clientRequestId": "voice_123"
 }
 ```
 
@@ -183,7 +188,8 @@ Submits unified user input from the bottom shell. This is the preferred event fo
 {
   "type": "input.submitted",
   "mode": "text",
-  "text": "Summarize the latest workspace and propose next steps"
+  "text": "Summarize the latest workspace and propose next steps",
+  "clientRequestId": "input_123"
 }
 ```
 
@@ -194,7 +200,8 @@ For voice mode:
   "type": "input.submitted",
   "mode": "voice",
   "text": "Plan my afternoon around one deep work block",
-  "audioUri": "file:///local/session/voice.m4a"
+  "audioUri": "file:///local/session/voice.m4a",
+  "clientRequestId": "input_124"
 }
 ```
 
@@ -205,7 +212,8 @@ Reports a user action from the rendered UI.
 ```json
 {
   "type": "action.triggered",
-  "actionId": "show-plan"
+  "actionId": "show-plan",
+  "clientRequestId": "action_123"
 }
 ```
 
@@ -217,6 +225,7 @@ Returns structured values from a rendered `form` block.
 {
   "type": "form.submitted",
   "formId": "task-form",
+  "clientRequestId": "form_123",
   "values": {
     "goal": "Ship the next runtime milestone",
     "constraints": "Need one review pass before publish"
@@ -264,9 +273,55 @@ type Screen = {
   id: string;
   title?: string;
   subtitle?: string;
+  mode?: "stable" | "processing" | "task" | "result" | "approval" | "error";
+  flow?: {
+    requestId?: string;
+    parentRequestId?: string;
+    state?: "ongoing" | "complete";
+    transition?: "replace" | "root";
+  };
+  interaction?: {
+    input?: "enabled" | "locked";
+    actions?: "enabled" | "locked";
+    forms?: "enabled" | "locked";
+    artifacts?: "enabled" | "locked";
+    history?: "enabled" | "locked";
+    reason?: string;
+  };
   blocks: Block[];
 };
 ```
+
+Lifecycle guidance:
+
+- Use `mode = "processing"` for request entry shells.
+- Use `mode = "task"` for intermediate task workspaces.
+- Use `mode = "result"` for completed result surfaces.
+- Reuse the same `flow.requestId` across all staged pages that belong to one request.
+- Use `flow.transition = "root"` only for top-level resets such as returning home.
+
+The current runtime baseline uses `flow.requestId` for more than animation hooks: it also powers request-aware history grouping, runtime inspection details, and staged page-flow debugging.
+
+## Runtime-Derived Verification
+
+The protocol stays event-driven. Verification views are derived by the runtime from normal protocol traffic plus `screen.flow` metadata, not from a second reporting channel.
+
+Current request projections include:
+
+- `runtime.currentRequest`
+- `runtime.lastCompletedRequest`
+- `runtime.currentRequestHistory`
+- `runtime.lastCompletedRequestHistory`
+
+Current request metrics include:
+
+- `historyEntryCount`
+- `workspaceEventCount`
+- `patchEventCount`
+- `resourceEventCount`
+- `issueCount`
+
+These derived views let local and remote harnesses share the same verification model while continuing to emit ordinary protocol events.
 
 ## Screen Patch Operations in v0.1
 
@@ -374,6 +429,12 @@ Supported item statuses in `v0.1`:
 }
 ```
 
+`details` can also be driven from built-in runtime sources:
+
+- `runtime.flow`
+- `runtime.interaction`
+- `runtime.session`
+
 Supported detail tones in `v0.1`:
 
 - `default`
@@ -396,7 +457,9 @@ Supported detail tones in `v0.1`:
 `log` can be driven in two ways:
 
 - `items`: the harness provides explicit log entries.
-- `source`: the client runtime resolves a built-in source such as `runtime.eventLog`.
+- `source`: the client runtime resolves a built-in source such as `runtime.eventLog`, `runtime.history`, or `runtime.currentRequestHistory`.
+
+`details` can also resolve from `runtime.currentRequest` when the host app needs a compact summary of the active request-aware flow state.
 
 Supported log tones in `v0.1`:
 
@@ -509,3 +572,10 @@ type ArtifactRef = {
 - `v0.1` supports both full screen replacement through `screen.updated` and minimal incremental updates through `screen.patched`.
 - Screen patches are intentionally constrained to a small set of metadata and block operations.
 - The protocol is position-agnostic: the harness may run locally, remotely, or in a hybrid topology.
+- The runtime now treats `screen.flow.requestId` as the primary request correlation key for staged page flows, history entries, and transition hooks.
+- `interaction.history` is a real renderer control surface, not just protocol decoration. Hosts can lock the history entry when a flow requires it.
+- The current baseline request flows are:
+  - input -> processing -> task -> finalizing -> result
+  - input -> processing -> direct result
+  - action -> approval -> result
+  - form -> processing -> finalizing -> result

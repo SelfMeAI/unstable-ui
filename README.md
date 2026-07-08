@@ -101,9 +101,89 @@ const harness = createRemoteHttpSseHarness({
 });
 ```
 
+For remote task flows, the recommended baseline is to emit explicit screen phases instead of jumping directly from one static page to another:
+
+1. emit a `processing` screen when the request starts
+2. emit a `task` screen if the harness needs an intermediate workspace
+3. emit another `task` or `processing` screen while finalizing if needed
+4. emit a `result` screen when the request is complete
+
+Attach `screen.flow.requestId` to the same request across those screens so the runtime can treat them as one continuous page flow.
+
+That same `requestId` now also drives request-aware history grouping in the runtime and renderer, so the demo's History view and Runtime playground can inspect one request chain instead of only flat event rows.
+
+Both demos also expose a `Flow lab` surface so you can manually trigger the current baseline flows from one place:
+
+- `processing -> result`
+- `processing -> task -> finalizing -> result`
+- `approval -> result`
+- `form -> processing -> finalizing -> result`
+
+Both demos also include a verification layer that is split across two surfaces:
+
+- `Runtime playground`
+- `Verification board`
+
+The `Runtime playground` embeds:
+
+- `runtime.history`
+- `runtime.currentRequest`
+- `runtime.currentRequestHistory`
+- `runtime.lastCompletedRequest`
+- `runtime.lastCompletedRequestHistory`
+- `runtime.eventLog`
+- runtime flow / interaction / session details
+- resource bridge test blocks
+
+The `Verification board` turns the current runtime state into request-level checks:
+
+- request-chain summaries
+- inferred flow profile (`direct`, `staged`, `patched`, `approval`, `form`)
+- assertion rows for the active or last completed request
+- verification matrix data
+- top-level verdict (`Pass`, `Needs review`, `Idle`)
+
+The timeline flow in both demos now exercises real `screen.patched` updates instead of only full-screen swaps, so verification can inspect patch counts, resource events, and issue signals at the request level.
+
+The harness SDK also exports screen helpers so harness authors do not need to rebuild `mode`, `flow`, and `interaction` objects by hand:
+
+```tsx
+import {
+  createProcessingScreen,
+  createResultScreen,
+  createOngoingScreenFlow,
+  createCompletedScreenFlow
+} from "@selfme/unstable-ui";
+
+const processingScreen = createProcessingScreen(
+  {
+    id: "task-processing",
+    title: "Workspace request",
+    blocks: [{ id: "processing-copy", type: "text", value: "Preparing the next workspace." }]
+  },
+  {
+    input: "locked",
+    actions: "locked",
+    forms: "locked",
+    reason: "The harness is still processing the request."
+  },
+  createOngoingScreenFlow("req_123")
+);
+
+const resultScreen = createResultScreen(
+  {
+    id: "task-result",
+    title: "Workspace request",
+    blocks: [{ id: "result-copy", type: "text", value: "The workspace is ready." }]
+  },
+  {},
+  createCompletedScreenFlow("req_123")
+);
+```
+
 ## Artifact Handlers
 
-The default renderer also accepts artifact handlers so a host app can customize preview and open behavior by artifact kind:
+The default renderer also accepts artifact handlers so a host app can customize preview, open, share, and download behavior by artifact kind:
 
 ```tsx
 import { AgentRuntimeView, type ArtifactHandlers } from "@selfme/unstable-ui";
@@ -115,7 +195,11 @@ const artifactHandlers: ArtifactHandlers = {
       description: "Custom host preview for HTML artifacts.",
       fields: [{ label: "Surface", value: artifact.uri }],
       openLabel: "Open report"
-    })
+    }),
+    share: async (artifact, context) => {
+      console.log(artifact.id);
+      await context.shareWithSystem();
+    }
   }
 };
 
@@ -123,6 +207,14 @@ export function AssistantScreen() {
   return <AgentRuntimeView harness={harness} artifactHandlers={artifactHandlers} />;
 }
 ```
+
+Without a custom handler, the renderer now includes built-in defaults for:
+
+- artifact `share`
+  Opens the native share sheet with the artifact URI.
+
+- artifact `download`
+  Falls back to the system URL handler for downloadable artifact kinds.
 
 Capability handlers work the same way for device-bridge requests:
 
@@ -147,6 +239,40 @@ const capabilityHandlers: CapabilityHandlers = {
 
 export function AssistantScreen() {
   return <AgentRuntimeView harness={harness} capabilityHandlers={capabilityHandlers} />;
+}
+```
+
+Without a custom handler, the renderer now includes built-in defaults for:
+
+- `open-url`
+  Opens the requested `payload.url` or `payload.uri` with the system browser.
+
+- `share`
+  Opens the native share sheet from `payload.title`, `payload.message`, and `payload.url`.
+
+## Voice Shell Configuration
+
+If you want to keep the built-in floating shell but tune its copy, default mode, and recent-input behavior, pass `voiceShell`:
+
+```tsx
+import { AgentRuntimeView, type VoiceShellOptions } from "@selfme/unstable-ui";
+
+const voiceShell: VoiceShellOptions = {
+  defaultInputMode: "voice",
+  promptLabel: "Voice-first shell for the runtime.",
+  idleLabel: "Hold to talk",
+  textPlaceholder: "Type a request",
+  talkButtonLabel: "Speak",
+  listeningButtonLabel: "Release",
+  textSubmitLabel: "Send",
+  recentInputHeadingLabel: "Recent",
+  recentInputCollapsedLabel: "LAST",
+  recentInputExpandedLabel: "HIDE",
+  recentInputPreviewDurationMs: 2400
+};
+
+export function AssistantScreen() {
+  return <AgentRuntimeView harness={harness} voiceShell={voiceShell} />;
 }
 ```
 
@@ -266,7 +392,7 @@ const screen: ScreenSchema = {
 };
 ```
 
-`timeline` works well with `screen.patched`, so the harness can advance step states without replacing the full screen.
+`timeline` works well with either `screen.patched` or full-screen replacements inside the same `screen.flow.requestId`, depending on whether the harness wants incremental updates or explicit stage surfaces.
 
 ## Details Blocks
 
@@ -431,6 +557,8 @@ export function AssistantScreen() {
   return <AgentRuntimeView harness={harness} runtimeOptions={{ persistence }} />;
 }
 ```
+
+`details` can also be resolved from runtime sources such as `runtime.flow`, `runtime.interaction`, and `runtime.session` when the host app needs a framework-native debug or inspection surface.
 
 ## Development
 

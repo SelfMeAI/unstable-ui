@@ -29,6 +29,7 @@
             <li>harness 负责表达“此刻展示什么、等待什么、正在处理什么”。</li>
             <li>客户端负责状态管理、渲染和把用户操作回传成结构化事件。</li>
             <li>双方通过 JSON 交互，不传可执行 UI 代码。</li>
+            <li>request 级元数据要足够完整，方便 runtime 做历史串联和派生验证。</li>
           </ul>
           <div class="note">
             当前协议演进重点已经明确：优先把请求生命周期和页面流转语义补清楚，而不是继续堆更多视觉层变化。
@@ -151,27 +152,50 @@
         <section class="section">
           <h2>4. Screen 语义</h2>
           <p>
-            当前仓库已经引入 <code class="inline">screen.mode</code> 和 <code class="inline">screen.interaction</code>。screen 不再只是“长什么样”，还要表达“当前页是什么角色、允许哪些交互、为什么被锁定”。
+            当前仓库已经引入 <code class="inline">screen.mode</code>、<code class="inline">screen.flow</code> 和
+            <code class="inline">screen.interaction</code>。screen 不再只是“长什么样”，还要表达“当前页是什么角色、属于哪轮请求、允许哪些交互、为什么被锁定”。
           </p>
           <ul>
             <li><code class="inline">stable</code>：稳定工作区，可继续输入或继续操作。</li>
+            <li><code class="inline">processing</code>：请求刚进入时的处理中页面。</li>
             <li><code class="inline">task</code>：任务处理中间页，允许持续 patch 或被后续页替换。</li>
             <li><code class="inline">result</code>：最终结果页或阶段性结果页。</li>
             <li><code class="inline">approval</code>：等待用户确认或设备能力决策。</li>
             <li><code class="inline">error</code>：错误或恢复页。</li>
           </ul>
           <p>
-            下一步要补的不是新的基础类型，而是更正式的页面流转语义，例如当前页是 replace、临时任务页还是最终结果页，以及一轮请求结束后什么时候恢复输入。
+            <code class="inline">screen.flow</code> 里现在至少要能表达 requestId、ongoing / complete 和 replace / root。这是 runtime 管输入锁、历史和后续动画系统的共同基础。
+          </p>
+          <p>
+            另外，当前 demo 已经开始真实消费 <code class="inline">screen.patched</code>。同一个 request 内如果只是局部推进工作区，不应该总是整页替换，而应尽量用 patch 表达增量变化。
           </p>
         </section>
 
         <section class="section">
-          <h2>5. 标准任务流</h2>
+          <h2>5.1 运行时派生验证视图</h2>
+          <p>
+            协议仍然只有一套事件流，没有单独再发一套“验证协议”。验证信息是 runtime 基于正常事件和
+            <code class="inline">screen.flow</code> 派生出来的。
+          </p>
           <ul>
-            <li>输入 - processing - task page - result。</li>
+            <li><code class="inline">runtime.currentRequest</code>：当前活跃请求快照。</li>
+            <li><code class="inline">runtime.lastCompletedRequest</code>：最近完成请求快照。</li>
+            <li><code class="inline">runtime.currentRequestHistory</code>：当前请求关联 history。</li>
+            <li><code class="inline">runtime.lastCompletedRequestHistory</code>：最近完成请求关联 history。</li>
+            <li>请求指标：historyEntryCount、workspaceEventCount、patchEventCount、resourceEventCount、issueCount。</li>
+          </ul>
+          <div class="note">
+            这意味着本地 harness 和远端 harness 只要老老实实发正常协议事件，就能自动获得同一套验证面，而不用额外实现第二套调试通道。
+          </div>
+        </section>
+
+        <section class="section">
+          <h2>6. 标准任务流</h2>
+          <ul>
+            <li>输入 - processing - task page - finalizing - result。</li>
             <li>输入 - processing - direct result。</li>
             <li>action - approval - result。</li>
-            <li>form - processing - result。</li>
+            <li>form - processing - finalizing - result。</li>
           </ul>
           <p>
             后面 runtime、renderer、demo harness 和动画系统，都默认围绕这几条标准流展开，不再按孤立页面来理解协议。
@@ -179,7 +203,7 @@
         </section>
 
         <section class="section">
-          <h2>6. Block 集合</h2>
+          <h2>7. Block 集合</h2>
           <p>当前内建 block 只保留最小集合，不追求一开始就完整。</p>
           <ul>
             <li><code class="inline">text</code>：纯文本块。</li>
@@ -189,7 +213,7 @@
             <li><code class="inline">form</code>：结构化输入块，提交后回传 <code class="inline">form.submitted</code>。</li>
             <li><code class="inline">timeline</code>：任务阶段时间线，适合表达 agent 进度与恢复点。</li>
             <li><code class="inline">details</code>：紧凑结构化摘要块，适合任务 brief、结果摘要和元信息。</li>
-            <li><code class="inline">log</code>：日志流块，可直接映射 runtime event log。</li>
+            <li><code class="inline">log</code>：日志流块，可直接映射 runtime event log 或 runtime history。</li>
             <li><code class="inline">section</code>：一层分组容器块，用来组织工作区。</li>
             <li><code class="inline">split</code>：双 pane 布局块，用来表达主次工作区。</li>
             <li><code class="inline">resource</code>：单个 artifact 资源块。</li>
@@ -261,6 +285,11 @@
     }
   ]
 }</code></pre>
+          <p>
+            <code class="inline">details</code> 现在也可以直接映射
+            <code class="inline">runtime.flow</code>、<code class="inline">runtime.interaction</code> 和
+            <code class="inline">runtime.session</code>，适合做框架级调试和运行时状态面。
+          </p>
           <pre><code>{
   "id": "log-1",
   "type": "log",
@@ -395,6 +424,8 @@
             <li>第一版协议坚持“事件 + 受约束 block schema”，不回退到任意组件代码。</li>
             <li>当前已经有最小 artifact / capability / form 闭环，下一步重点先转向 lifecycle 和 flow controller。</li>
             <li>现在已经支持最小 screen patch，但仍然保持受约束的小操作集合，不开放任意 UI diff。</li>
+            <li>现在已经把 <code class="inline">screen.flow.requestId</code> 作为 staged page flow、history 和 transition hooks 的主关联键。</li>
+            <li><code class="inline">interaction.history</code> 现在已经是会真正影响 renderer 行为的控制位。</li>
             <li>当前已经具备基础 screen mode / interaction 语义，但还没有完成正式的页面流转协议。</li>
             <li>如果后续出现更复杂布局需求，优先扩展 block 和 layout schema，而不是引入可执行 UI。</li>
           </ul>

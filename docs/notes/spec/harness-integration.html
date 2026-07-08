@@ -69,16 +69,60 @@
         <section class="section">
           <h2>4. Demo 参考</h2>
           <ul>
-            <li><code class="inline">apps/demo-expo</code>：演示本地 harness 路径和默认 runtime shell。</li>
-            <li><code class="inline">apps/demo-harness</code>：演示最小远端 HTTP + SSE harness 服务。</li>
+            <li><code class="inline">apps/demo-expo</code>：演示本地 harness 路径、默认 runtime shell、Flow lab 调试入口、Runtime playground 页面和 Verification board 页面。</li>
+            <li><code class="inline">apps/demo-harness</code>：演示最小远端 HTTP + SSE harness 服务，以及 direct / task / form / patched timeline 标准流，加上同样的 Runtime playground 和 Verification board 页面。</li>
           </ul>
         </section>
 
         <section class="section">
-          <h2>5. 当前判断</h2>
+          <h2>5. 页面流 helper</h2>
+          <p>
+            现在 <code class="inline">harness-sdk</code> 已经导出一组 screen helper，用来统一构建带
+            <code class="inline">mode</code>、<code class="inline">flow</code> 和
+            <code class="inline">interaction</code> 的页面。
+          </p>
+          <ul>
+            <li><code class="inline">createStableScreen</code></li>
+            <li><code class="inline">createProcessingScreen</code></li>
+            <li><code class="inline">createTaskScreen</code></li>
+            <li><code class="inline">createResultScreen</code></li>
+            <li><code class="inline">createRootScreenFlow</code></li>
+            <li><code class="inline">createOngoingScreenFlow</code></li>
+            <li><code class="inline">createCompletedScreenFlow</code></li>
+            <li><code class="inline">applyScreenFlow</code></li>
+          </ul>
+          <div class="note">
+            目的不是增加抽象层，而是减少接入者自己手拼页面状态字段，避免不同 harness 对 lifecycle 的表达越来越散。
+          </div>
+        </section>
+
+        <section class="section">
+          <h2>6. 验证面</h2>
+          <p>
+            runtime 现在已经开始内建面向接入调试的验证视图，不需要 harness 额外发一套“验收事件”。
+          </p>
+          <ul>
+            <li>按 <code class="inline">requestId</code> 串联的 history。</li>
+            <li>当前请求和最近完成请求的派生快照。</li>
+            <li>请求级 metrics：history、workspace、patch、resource、issue。</li>
+            <li>Verification board：断言列表、矩阵视图和总 verdict。</li>
+          </ul>
+          <div class="note">
+            接入方的重点不再是自己造一套 debug UI，而是先把 requestId、screen.mode、screen.flow、screen.patched 这些协议语义发准确。
+          </div>
+        </section>
+
+        <section class="section">
+          <h2>7. 当前判断</h2>
           <ul>
             <li>React Native 主实现线现在已经具备最小但真实的接入闭环。</li>
             <li>当前重点是让本地 / 远端 / 混合三类接入都能落在统一 adapter 模型上。</li>
+            <li>默认 renderer 已经内建 <code class="inline">open-url</code> 和 <code class="inline">share</code> 两类系统桥接，不必一开始就自定义 handler。</li>
+            <li>默认 renderer 也已经内建 artifact 的 <code class="inline">share</code> 和 <code class="inline">download</code> 行为，资源块不再只停留在 preview / open。</li>
+            <li>history 现在已经开始绑定 requestId，同一次输入触发出来的 processing / task / result 页面能被串起来回看。</li>
+            <li>runtime 已经能派生 currentRequest、lastCompletedRequest 和请求级验证指标，调试重点正在从“看零散 event log”转向“看整条 request 链”。</li>
+            <li><code class="inline">interaction.history</code> 现在是正式生效的 renderer 控制位，不再只是协议里的摆设字段。</li>
+            <li>如果宿主只想调输入壳文案、默认模式和最近输入行为，可以先走 <code class="inline">voiceShell</code> 配置；只有要完全替换底部输入 UI 时才需要上 <code class="inline">renderVoiceShell</code>。</li>
             <li>它现在更适合 starter integration，而不是完整生产接入套件。</li>
           </ul>
         </section>

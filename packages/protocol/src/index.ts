@@ -112,7 +112,24 @@ export const detailsBlockSchema = z.object({
   type: z.literal("details"),
   title: z.string().optional(),
   description: z.string().optional(),
-  items: z.array(detailItemSchema).min(1)
+  source: z
+    .enum([
+      "runtime.flow",
+      "runtime.interaction",
+      "runtime.session",
+      "runtime.currentRequest",
+      "runtime.lastCompletedRequest",
+      "runtime.currentRequestAssertions",
+      "runtime.lastCompletedRequestAssertions",
+      "runtime.currentRequestMatrix",
+      "runtime.lastCompletedRequestMatrix",
+      "runtime.currentRequestVerdict",
+      "runtime.lastCompletedRequestVerdict"
+    ])
+    .optional(),
+  items: z.array(detailItemSchema).optional()
+}).refine((value) => value.source || value.items?.length, {
+  message: "A details block requires either source or items."
 });
 
 export const logItemSchema = z.object({
@@ -129,7 +146,14 @@ export const logBlockSchema = z
     type: z.literal("log"),
     title: z.string().optional(),
     description: z.string().optional(),
-    source: z.enum(["runtime.eventLog"]).optional(),
+    source: z
+      .enum([
+        "runtime.eventLog",
+        "runtime.history",
+        "runtime.currentRequestHistory",
+        "runtime.lastCompletedRequestHistory"
+      ])
+      .optional(),
     maxItems: z.number().int().positive().optional(),
     emptyLabel: z.string().optional(),
     items: z.array(logItemSchema).optional()
@@ -193,7 +217,18 @@ export const splitBlockSchema = z.object({
   panes: z.array(splitPaneSchema).min(2).max(2)
 });
 
-export const screenModeSchema = z.enum(["stable", "task", "result", "approval", "error"]);
+export const screenModeSchema = z.enum(["stable", "processing", "task", "result", "approval", "error"]);
+
+export const screenFlowStateSchema = z.enum(["ongoing", "complete"]);
+
+export const screenFlowTransitionSchema = z.enum(["replace", "root"]);
+
+export const screenFlowSchema = z.object({
+  requestId: z.string().optional(),
+  parentRequestId: z.string().optional(),
+  state: screenFlowStateSchema.default("ongoing"),
+  transition: screenFlowTransitionSchema.default("replace")
+});
 
 export const screenInteractionAccessSchema = z.enum(["enabled", "locked"]);
 
@@ -225,6 +260,7 @@ export const screenSchema = z.object({
   title: z.string().optional(),
   subtitle: z.string().optional(),
   mode: screenModeSchema.default("stable"),
+  flow: screenFlowSchema.optional(),
   interaction: screenInteractionSchema.optional(),
   blocks: z.array(blockSchema)
 });
@@ -241,6 +277,10 @@ export const screenPatchOperationSchema = z.discriminatedUnion("type", [
   z.object({
     type: z.literal("set_mode"),
     mode: screenModeSchema
+  }),
+  z.object({
+    type: z.literal("set_flow"),
+    flow: screenFlowSchema.nullable()
   }),
   z.object({
     type: z.literal("set_interaction"),
@@ -307,23 +347,27 @@ export const clientEventSchema = z.discriminatedUnion("type", [
   z.object({
     type: z.literal("voice.input"),
     transcript: z.string(),
-    audioUri: z.string().optional()
+    audioUri: z.string().optional(),
+    clientRequestId: z.string().optional()
   }),
   z.object({
     type: z.literal("input.submitted"),
     mode: z.enum(["voice", "text"]),
     text: z.string().optional(),
-    audioUri: z.string().optional()
+    audioUri: z.string().optional(),
+    clientRequestId: z.string().optional()
   }),
   z.object({
     type: z.literal("action.triggered"),
     actionId: z.string(),
-    payload: z.record(z.string(), z.unknown()).optional()
+    payload: z.record(z.string(), z.unknown()).optional(),
+    clientRequestId: z.string().optional()
   }),
   z.object({
     type: z.literal("form.submitted"),
     formId: z.string(),
-    values: z.record(z.string(), z.string())
+    values: z.record(z.string(), z.string()),
+    clientRequestId: z.string().optional()
   }),
   z.object({
     type: z.literal("artifact.requested"),
@@ -350,6 +394,9 @@ export type SectionBlock = z.infer<typeof sectionBlockSchema>;
 export type SplitBlock = z.infer<typeof splitBlockSchema>;
 export type SplitPane = z.infer<typeof splitPaneSchema>;
 export type ScreenMode = z.infer<typeof screenModeSchema>;
+export type ScreenFlow = z.infer<typeof screenFlowSchema>;
+export type ScreenFlowState = z.infer<typeof screenFlowStateSchema>;
+export type ScreenFlowTransition = z.infer<typeof screenFlowTransitionSchema>;
 export type ScreenInteraction = z.infer<typeof screenInteractionSchema>;
 export type TimelineItem = z.infer<typeof timelineItemSchema>;
 export type TimelineBlock = z.infer<typeof timelineBlockSchema>;
@@ -394,6 +441,12 @@ export function applyScreenPatch(
         nextScreen = {
           ...nextScreen,
           mode: operation.mode
+        };
+        break;
+      case "set_flow":
+        nextScreen = {
+          ...nextScreen,
+          flow: operation.flow ?? undefined
         };
         break;
       case "set_interaction":

@@ -1,4 +1,12 @@
-import { parseHarnessEvent, type ClientEvent, type HarnessEvent } from "@selfme/unstable-ui-protocol";
+import {
+  parseHarnessEvent,
+  type ClientEvent,
+  type HarnessEvent,
+  type ScreenFlow,
+  type ScreenInteraction,
+  type ScreenMode,
+  type ScreenSchema
+} from "@selfme/unstable-ui-protocol";
 
 export type HarnessListener = (event: HarnessEvent) => void;
 export type Unsubscribe = () => void;
@@ -77,6 +85,115 @@ export interface RemoteHttpSseHarnessOptions {
   buildSessionStartBody?: () => Record<string, unknown> | undefined;
   resolveStreamUrl?: (response: SessionStartResponse) => string;
   resolveEventUrl?: (response: SessionStartResponse) => string;
+}
+
+export const defaultScreenInteraction: ScreenInteraction = {
+  input: "enabled",
+  actions: "enabled",
+  forms: "enabled",
+  artifacts: "enabled",
+  history: "enabled"
+};
+
+export function resolveScreenInteraction(interaction?: Partial<ScreenInteraction>): ScreenInteraction {
+  return {
+    ...defaultScreenInteraction,
+    ...interaction
+  };
+}
+
+export function createRootScreenFlow(): ScreenFlow {
+  return {
+    transition: "root",
+    state: "complete"
+  };
+}
+
+export function createOngoingScreenFlow(requestId?: string, parentRequestId?: string): ScreenFlow {
+  return {
+    requestId,
+    parentRequestId,
+    transition: "replace",
+    state: "ongoing"
+  };
+}
+
+export function createCompletedScreenFlow(requestId?: string, parentRequestId?: string): ScreenFlow {
+  return {
+    requestId,
+    parentRequestId,
+    transition: "replace",
+    state: "complete"
+  };
+}
+
+export function applyScreenFlow(screen: ScreenSchema, flow: ScreenFlow): ScreenSchema {
+  return {
+    ...screen,
+    flow
+  };
+}
+
+export function withScreenState(
+  screen: Omit<ScreenSchema, "mode" | "interaction" | "flow">,
+  mode: ScreenMode,
+  interaction: Partial<ScreenInteraction> = {},
+  flow: ScreenFlow = createRootScreenFlow()
+): ScreenSchema {
+  return {
+    ...screen,
+    mode,
+    flow,
+    interaction: resolveScreenInteraction(interaction)
+  };
+}
+
+export function createStableScreen(
+  screen: Omit<ScreenSchema, "mode" | "interaction" | "flow">,
+  interaction: Partial<ScreenInteraction> = {},
+  flow: ScreenFlow = createRootScreenFlow()
+): ScreenSchema {
+  return withScreenState(screen, "stable", interaction, flow);
+}
+
+export function createProcessingScreen(
+  screen: Omit<ScreenSchema, "mode" | "interaction" | "flow">,
+  interaction: Partial<ScreenInteraction> = {},
+  flow: ScreenFlow = createOngoingScreenFlow()
+): ScreenSchema {
+  return withScreenState(screen, "processing", interaction, flow);
+}
+
+export function createTaskScreen(
+  screen: Omit<ScreenSchema, "mode" | "interaction" | "flow">,
+  interaction: Partial<ScreenInteraction> = {},
+  flow: ScreenFlow = createOngoingScreenFlow()
+): ScreenSchema {
+  return withScreenState(screen, "task", interaction, flow);
+}
+
+export function createResultScreen(
+  screen: Omit<ScreenSchema, "mode" | "interaction" | "flow">,
+  interaction: Partial<ScreenInteraction> = {},
+  flow: ScreenFlow = createCompletedScreenFlow()
+): ScreenSchema {
+  return withScreenState(screen, "result", interaction, flow);
+}
+
+export function createApprovalScreen(
+  screen: Omit<ScreenSchema, "mode" | "interaction" | "flow">,
+  interaction: Partial<ScreenInteraction> = {},
+  flow: ScreenFlow = createOngoingScreenFlow()
+): ScreenSchema {
+  return withScreenState(screen, "approval", interaction, flow);
+}
+
+export function createErrorScreen(
+  screen: Omit<ScreenSchema, "mode" | "interaction" | "flow">,
+  interaction: Partial<ScreenInteraction> = {},
+  flow: ScreenFlow = createCompletedScreenFlow()
+): ScreenSchema {
+  return withScreenState(screen, "error", interaction, flow);
 }
 
 function createEmitter() {

@@ -136,13 +136,16 @@
           <ol>
             <li>用户从底部固定 voice / text shell 发起输入。</li>
             <li>runtime 进入 processing 或 task 相关状态，并根据协议锁定输入或局部交互。</li>
-            <li>harness 可以直接返回结果页，也可以先返回任务处理中间页。</li>
-            <li>任务处理中间页允许继续 patch、替换或推进到最终结果页。</li>
+            <li>harness 可以直接返回结果页，也可以先返回任务处理中间页，必要时再经过 finalizing 收束页。</li>
+            <li>任务处理中间页允许继续 patch、替换或推进到最终结果页，但主线默认优先明确的 staged screen。</li>
             <li>最终结果页稳定后，输入重新解锁，用户可以继续发起下一轮。</li>
           </ol>
           <div class="note">
             后面的动画系统必须挂在这条页面流转主线上，而不是靠渲染层临时猜测“现在是不是该动一下”。
           </div>
+          <p>
+            当前实现已经补上 renderer transition hooks。后续动画层默认只监听 screen / mode / flow / lock 的变化事件，不再自行推断业务流程。
+          </p>
         </section>
 
         <section class="section">
@@ -160,10 +163,10 @@
         <section class="section">
           <h2>7. 当前标准任务流</h2>
           <ul>
-            <li>输入 - processing - task page - result。</li>
+            <li>输入 - processing - task page - finalizing - result。</li>
             <li>输入 - processing - direct result。</li>
             <li>action - approval - result。</li>
-            <li>form - processing - result。</li>
+            <li>form - processing - finalizing - result。</li>
           </ul>
           <p>
             之后新增 block、补动画、做远端示例时，都应先确认自己属于哪条标准流，避免再次回到“页面很多，但没有统一推进逻辑”的状态。
@@ -196,7 +199,14 @@
             <li>语音入口壳、最小 artifact preview/open bridge、最小 capability request 流已实现。</li>
             <li>零依赖的 remote harness 示例服务已实现。</li>
             <li>screen.mode、screen.interaction、history、输入锁和固定导航栏已经进入主干。</li>
-            <li>下一步重点是把 screen lifecycle 和 runtime flow controller 明确化。</li>
+            <li>history 已经开始携带 request 级关联信息，能回看到底是哪一次输入、动作或表单触发了后续页面流。</li>
+            <li>runtime 已经补出 currentRequest、lastCompletedRequest 及其对应 history 视图，不再只剩扁平 event log。</li>
+            <li>screen lifecycle、runtime flow controller 和 renderer transition hooks 已进入主干。</li>
+            <li>demo 已经开始消费 transition hooks，过渡效果从框架事件驱动，而不是再靠页面内零散动画拼接。</li>
+            <li>远端 harness 示例已经和本地 demo 对齐到明确的 request flow 页面阶段。</li>
+            <li>harness-sdk 已经开始导出正式的 screen flow helper，减少接入方自己拼 mode / flow / interaction。</li>
+            <li>timeline 类流程已经开始真实使用 <code class="inline">screen.patched</code>，而不是只做整屏替换。</li>
+            <li>demo 里已经有 Verification board，可基于请求链、patch 数、artifact 事件和 issue 数做派生校验。</li>
             <li>更完整的 artifact 渲染、真实设备桥接和更成熟的远端接入辅助仍未实现。</li>
           </ul>
         </section>
