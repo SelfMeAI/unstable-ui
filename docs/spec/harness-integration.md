@@ -85,8 +85,13 @@ The runtime now exposes a verification layer that harness authors can use while 
 - active and last-completed request snapshots
 - request metrics for history, workspace, patch, resource, and issue counts
 - derived assertions, matrix rows, and a top-level verdict
+- bridge-facing runtime sources for artifact inventory and pending capability queues
+- request-scoped resource queries for the active and last completed request chains
+- request index sources that summarize every grouped request chain in the runtime history
 
 These are runtime projections. A harness does not need to emit extra verification events to benefit from them.
+
+The runtime package also exports request query helpers for these projections, so custom renderers or host diagnostics can reuse the same request catalog, request-target resolver, resource query, and summary logic directly from `@selfme/unstable-ui-runtime`.
 
 ## Notes
 
@@ -110,6 +115,7 @@ The default renderer now includes built-in bridge behavior for:
 - artifact `download`
 - capability `open-url`
 - capability `share`
+- mock capability resolution for `microphone`, `camera`, `photo-library`, `location`, and `file-picker`
 
 So a host app does not need a custom handler just to demo those common system actions.
 
@@ -119,5 +125,10 @@ The default renderer also supports a middle path for input-shell integration:
 
 - pass `voiceShell` when you want to keep the built-in floating shell but adjust copy, default mode, and recent-input behavior
 - pass `renderVoiceShell` only when the host app needs to replace the bottom shell UI completely
+
+There is now also a middle path for host bridge integration:
+
+- pass `hostBridge` when the host app wants to intercept open-url, share, download/open fallback, or default capability resolution behavior without rewriting the higher-level renderer handlers
+- keep `artifactHandlers` and `capabilityHandlers` for resource-kind or capability-specific UI and resolution customizations
 
 It is intended as a starter integration surface, not yet a full production integration kit.

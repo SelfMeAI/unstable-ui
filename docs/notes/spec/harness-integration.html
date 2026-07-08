@@ -106,9 +106,16 @@
             <li>当前请求和最近完成请求的派生快照。</li>
             <li>请求级 metrics：history、workspace、patch、resource、issue。</li>
             <li>Verification board：断言列表、矩阵视图和总 verdict。</li>
+            <li>bridge 调试源：artifact inventory、pending capability queue 和 bridge summary。</li>
+            <li>request 级资源查询：当前请求和最近完成请求都能单独拉出 resource summary 和 resource history。</li>
+            <li>request 索引：现在还能把所有 request chain 汇总成一份可读索引，不必只盯当前或最近完成那两条。</li>
           </ul>
           <div class="note">
             接入方的重点不再是自己造一套 debug UI，而是先把 requestId、screen.mode、screen.flow、screen.patched 这些协议语义发准确。
+          </div>
+          <div class="note">
+            另外，这套 request 查询与汇总逻辑现在已经从 <code class="inline">@selfme/unstable-ui-runtime</code> 正式导出成 helper API，
+            自定义 renderer 或宿主调试面板可以直接复用 request catalog、request target resolver、resource query 和 summary 逻辑，不用再在各自工程里复制 renderer 内部实现。
           </div>
         </section>
 
@@ -122,6 +129,7 @@
             <li>history 现在已经开始绑定 requestId，同一次输入触发出来的 processing / task / result 页面能被串起来回看。</li>
             <li>runtime 已经能派生 currentRequest、lastCompletedRequest 和请求级验证指标，调试重点正在从“看零散 event log”转向“看整条 request 链”。</li>
             <li><code class="inline">interaction.history</code> 现在是正式生效的 renderer 控制位，不再只是协议里的摆设字段。</li>
+            <li>如果宿主只想接管系统打开、分享或默认 capability resolution，而不想重写更高层 handler，现在可以走 <code class="inline">hostBridge</code>。</li>
             <li>如果宿主只想调输入壳文案、默认模式和最近输入行为，可以先走 <code class="inline">voiceShell</code> 配置；只有要完全替换底部输入 UI 时才需要上 <code class="inline">renderVoiceShell</code>。</li>
             <li>它现在更适合 starter integration，而不是完整生产接入套件。</li>
           </ul>

@@ -323,6 +323,33 @@ Current request metrics include:
 
 These derived views let local and remote harnesses share the same verification model while continuing to emit ordinary protocol events.
 
+Additional runtime inspection sources currently exposed to renderer blocks:
+
+- details source `runtime.bridge`
+- details source `runtime.requestIndexSummary`
+- details source `runtime.lastCapabilityResolution`
+- details source `runtime.request`
+- details source `runtime.requestResources`
+- details source `runtime.requestAssertions`
+- details source `runtime.requestMatrix`
+- details source `runtime.requestVerdict`
+- details source `runtime.currentRequestResources`
+- details source `runtime.lastCompletedRequestResources`
+- log source `runtime.requestIndex`
+- log source `runtime.requestHistory`
+- log source `runtime.requestResourceHistory`
+- log source `runtime.artifacts`
+- log source `runtime.capabilityHistory`
+- log source `runtime.capabilityRequests`
+- log source `runtime.currentRequestResourceHistory`
+- log source `runtime.lastCompletedRequestResourceHistory`
+
+These are intended for bridge debugging surfaces such as runtime playgrounds and host integration diagnostics.
+
+For the generic request sources above, `details` and `log` blocks may also provide `requestTarget`. The reserved values are `current` and `lastCompleted`; any other non-empty string is treated as an explicit `requestId`.
+
+The current runtime package also exports helper APIs for these request-level projections, so consumers can query grouped request chains, resolve `current` or `lastCompleted` request targets, inspect request-scoped resource activity, and reuse summarized request metrics without re-implementing the derivation layer in each renderer.
+
 ## Screen Patch Operations in v0.1
 
 - `set_title`
@@ -551,11 +578,22 @@ type ArtifactRef = {
   source: "local" | "remote";
   title?: string;
   mimeType?: string;
+  preview?: {
+    text?: string;
+    summary?: string;
+    thumbnailUri?: string;
+    fields?: Array<{
+      label: string;
+      value: string;
+    }>;
+  };
   previewable?: boolean;
   openable?: boolean;
   expiresAt?: string;
 };
 ```
+
+`preview` is optional renderer-facing metadata. It lets a harness ship lightweight inline preview content without requiring a custom host-side artifact handler.
 
 ## Capability Types in v0.1
 
@@ -566,6 +604,17 @@ type ArtifactRef = {
 - `file-picker`
 - `share`
 - `open-url`
+
+When a host app does not register a custom capability handler, the default renderer behavior is:
+
+- `open-url`
+  Opens the system browser for `payload.url` or `payload.uri`.
+
+- `share`
+  Opens the native share sheet from `payload.title`, `payload.message`, and `payload.url`.
+
+- `microphone`, `camera`, `photo-library`, `location`, `file-picker`
+  Return explicit default mock resolution payloads so harness authors can validate flow semantics before wiring real native bridges.
 
 ## Notes
 

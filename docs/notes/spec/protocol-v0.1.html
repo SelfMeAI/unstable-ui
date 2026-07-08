@@ -183,9 +183,22 @@
             <li><code class="inline">runtime.currentRequestHistory</code>：当前请求关联 history。</li>
             <li><code class="inline">runtime.lastCompletedRequestHistory</code>：最近完成请求关联 history。</li>
             <li>请求指标：historyEntryCount、workspaceEventCount、patchEventCount、resourceEventCount、issueCount。</li>
+            <li>bridge 调试源：<code class="inline">runtime.bridge</code>、<code class="inline">runtime.artifacts</code>、<code class="inline">runtime.capabilityRequests</code>、<code class="inline">runtime.capabilityHistory</code>、<code class="inline">runtime.lastCapabilityResolution</code>。</li>
+            <li>通用 request target 源：<code class="inline">runtime.request</code>、<code class="inline">runtime.requestResources</code>、<code class="inline">runtime.requestHistory</code>、<code class="inline">runtime.requestResourceHistory</code>、<code class="inline">runtime.requestAssertions</code>、<code class="inline">runtime.requestMatrix</code>、<code class="inline">runtime.requestVerdict</code>。</li>
+            <li>request 级资源查询源：<code class="inline">runtime.currentRequestResources</code>、<code class="inline">runtime.lastCompletedRequestResources</code>、<code class="inline">runtime.currentRequestResourceHistory</code>、<code class="inline">runtime.lastCompletedRequestResourceHistory</code>。</li>
+            <li>request 索引源：<code class="inline">runtime.requestIndexSummary</code> 和 <code class="inline">runtime.requestIndex</code>。</li>
           </ul>
           <div class="note">
             这意味着本地 harness 和远端 harness 只要老老实实发正常协议事件，就能自动获得同一套验证面，而不用额外实现第二套调试通道。
+          </div>
+          <div class="note">
+            另外，这套 request 级派生能力现在也已经从 <code class="inline">@selfme/unstable-ui-runtime</code> 正式导出成 helper API，
+            自定义 renderer 或宿主调试页可以直接复用 request catalog、request target resolver、resource query 和 summary 逻辑，不需要再各自复制一份实现。
+          </div>
+          <div class="note">
+            通用 request 源可以额外带一个 <code class="inline">requestTarget</code>。保留值只有
+            <code class="inline">current</code> 和 <code class="inline">lastCompleted</code>，
+            其他非空字符串都按显式 <code class="inline">requestId</code> 处理。
           </div>
         </section>
 
@@ -350,6 +363,23 @@
     }
   ]
 }</code></pre>
+        </section>
+
+        <section class="section">
+          <h2>8. Artifact 预览元数据</h2>
+          <p>
+            现在 artifact 除了基础的 <code class="inline">id / kind / uri / source</code>，还可以附带轻量
+            <code class="inline">preview</code> 数据，供 renderer 默认预览层直接消费。
+          </p>
+          <ul>
+            <li><code class="inline">preview.text</code>：适合 text / json 这类可直接展示的内容。</li>
+            <li><code class="inline">preview.summary</code>：适合给默认预览层一句摘要。</li>
+            <li><code class="inline">preview.thumbnailUri</code>：适合 image 这类资源提供一个缩略预览引用。</li>
+            <li><code class="inline">preview.fields</code>：适合传一些结构化元信息。</li>
+          </ul>
+          <div class="note">
+            这个字段不是让协议承载大文件本体，而是让 harness 在不自定义 host handler 的情况下，也能给默认 artifact preview 一个更像样的初始内容。
+          </div>
         </section>
 
         <section class="section">

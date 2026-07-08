@@ -14,6 +14,21 @@ export const artifactRefSchema = z.object({
   source: z.enum(["local", "remote"]),
   title: z.string().optional(),
   mimeType: z.string().optional(),
+  preview: z
+    .object({
+      text: z.string().optional(),
+      summary: z.string().optional(),
+      thumbnailUri: z.string().optional(),
+      fields: z
+        .array(
+          z.object({
+            label: z.string(),
+            value: z.string()
+          })
+        )
+        .optional()
+    })
+    .optional(),
   previewable: z.boolean().default(true),
   openable: z.boolean().default(true),
   expiresAt: z.string().optional()
@@ -107,6 +122,8 @@ export const detailItemSchema = z.object({
   tone: z.enum(["default", "success", "warning", "danger"]).optional()
 });
 
+export const requestTargetSchema = z.string().min(1);
+
 export const detailsBlockSchema = z.object({
   id: z.string(),
   type: z.literal("details"),
@@ -115,10 +132,20 @@ export const detailsBlockSchema = z.object({
   source: z
     .enum([
       "runtime.flow",
+      "runtime.bridge",
+      "runtime.requestIndexSummary",
       "runtime.interaction",
       "runtime.session",
+      "runtime.lastCapabilityResolution",
+      "runtime.request",
+      "runtime.requestResources",
+      "runtime.requestAssertions",
+      "runtime.requestMatrix",
+      "runtime.requestVerdict",
       "runtime.currentRequest",
+      "runtime.currentRequestResources",
       "runtime.lastCompletedRequest",
+      "runtime.lastCompletedRequestResources",
       "runtime.currentRequestAssertions",
       "runtime.lastCompletedRequestAssertions",
       "runtime.currentRequestMatrix",
@@ -127,6 +154,7 @@ export const detailsBlockSchema = z.object({
       "runtime.lastCompletedRequestVerdict"
     ])
     .optional(),
+  requestTarget: requestTargetSchema.optional(),
   items: z.array(detailItemSchema).optional()
 }).refine((value) => value.source || value.items?.length, {
   message: "A details block requires either source or items."
@@ -150,10 +178,19 @@ export const logBlockSchema = z
       .enum([
         "runtime.eventLog",
         "runtime.history",
+        "runtime.requestIndex",
+        "runtime.requestHistory",
+        "runtime.requestResourceHistory",
+        "runtime.artifacts",
+        "runtime.capabilityHistory",
+        "runtime.capabilityRequests",
         "runtime.currentRequestHistory",
-        "runtime.lastCompletedRequestHistory"
+        "runtime.currentRequestResourceHistory",
+        "runtime.lastCompletedRequestHistory",
+        "runtime.lastCompletedRequestResourceHistory"
       ])
       .optional(),
+    requestTarget: requestTargetSchema.optional(),
     maxItems: z.number().int().positive().optional(),
     emptyLabel: z.string().optional(),
     items: z.array(logItemSchema).optional()
@@ -385,6 +422,7 @@ export type ActionItem = z.infer<typeof actionItemSchema>;
 export type ArtifactRef = z.infer<typeof artifactRefSchema>;
 export type CapabilityRequest = z.infer<typeof capabilityRequestSchema>;
 export type DetailItem = z.infer<typeof detailItemSchema>;
+export type RequestTarget = "current" | "lastCompleted" | string;
 export type FormField = z.infer<typeof formFieldSchema>;
 export type FormBlock = z.infer<typeof formBlockSchema>;
 export type DetailsBlock = z.infer<typeof detailsBlockSchema>;

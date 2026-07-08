@@ -127,13 +127,27 @@ Both demos also include a verification layer that is split across two surfaces:
 The `Runtime playground` embeds:
 
 - `runtime.history`
+- `runtime.requestIndex`
+- `runtime.artifacts`
+- `runtime.capabilityRequests`
+- `runtime.capabilityHistory`
+- `runtime.bridge`
+- `runtime.requestIndexSummary`
+- `runtime.lastCapabilityResolution`
 - `runtime.currentRequest`
+- `runtime.currentRequestResources`
 - `runtime.currentRequestHistory`
+- `runtime.currentRequestResourceHistory`
 - `runtime.lastCompletedRequest`
+- `runtime.lastCompletedRequestResources`
 - `runtime.lastCompletedRequestHistory`
+- `runtime.lastCompletedRequestResourceHistory`
+- generic request-target sources driven by `requestTarget`, including `runtime.request`, `runtime.requestResources`, `runtime.requestHistory`, `runtime.requestResourceHistory`, `runtime.requestAssertions`, `runtime.requestMatrix`, and `runtime.requestVerdict`
 - `runtime.eventLog`
 - runtime flow / interaction / session details
 - resource bridge test blocks
+
+The same request-aware projections are now also exported from `@selfme/unstable-ui-runtime` as reusable query helpers, including catalog, summary, resource, and request-target resolvers such as `getRuntimeRequestCatalog`, `getRuntimeRequestGroup`, and `resolveRuntimeRequestChain`.
 
 The `Verification board` turns the current runtime state into request-level checks:
 
@@ -210,6 +224,9 @@ export function AssistantScreen() {
 
 Without a custom handler, the renderer now includes built-in defaults for:
 
+- artifact inline preview data
+  If an artifact includes `preview.text`, `preview.summary`, `preview.thumbnailUri`, or preview `fields`, the default preview sheet renders that data directly.
+
 - artifact `share`
   Opens the native share sheet with the artifact URI.
 
@@ -242,6 +259,42 @@ export function AssistantScreen() {
 }
 ```
 
+If you want to intercept system-facing bridge behavior without attaching per-artifact or per-capability handlers, pass `hostBridge`:
+
+```tsx
+import { AgentRuntimeView, type HostBridge } from "@selfme/unstable-ui";
+
+const hostBridge: HostBridge = {
+  openUrl: async (url, context) => {
+    console.log(context.reason, url);
+  },
+  share: async (payload, context) => {
+    console.log(context.reason, payload.url ?? payload.message);
+  },
+  resolveCapability: async (request, granted, context) => {
+    if (!granted) {
+      return {
+        payload: {
+          bridge: "host-app",
+          granted: false
+        }
+      };
+    }
+
+    return {
+      payload: {
+        ...(context.defaultPayload ?? {}),
+        bridge: "host-app"
+      }
+    };
+  }
+};
+
+export function AssistantScreen() {
+  return <AgentRuntimeView harness={harness} hostBridge={hostBridge} />;
+}
+```
+
 Without a custom handler, the renderer now includes built-in defaults for:
 
 - `open-url`
@@ -249,6 +302,9 @@ Without a custom handler, the renderer now includes built-in defaults for:
 
 - `share`
   Opens the native share sheet from `payload.title`, `payload.message`, and `payload.url`.
+
+- `microphone`, `camera`, `photo-library`, `location`, `file-picker`
+  Return explicit default mock resolution payloads when no host-specific capability handler is registered.
 
 ## Voice Shell Configuration
 

@@ -26,14 +26,24 @@ import type {
   DetailItem,
   LogBlock,
   LogItem,
+  RequestTarget,
   ScreenFlowTransition
 } from "@selfme/unstable-ui-protocol";
 import {
   AgentRuntimeProvider,
+  getRuntimeCapabilityHistoryEntries,
+  getRuntimeCurrentRequestEntries,
+  getRuntimeLastCapabilityResolutionEntry,
+  getRuntimeRequestCatalog,
+  getRuntimeRequestResourceEntries,
+  resolveRuntimeRequestChain,
+  summarizeRuntimeRequestEntries,
   useAgentRuntime,
   type AgentRuntimeOptions,
   type RuntimeContextValue,
-  type RuntimeEventLogEntry
+  type RuntimeEventLogEntry,
+  type RuntimeRequestSummary,
+  type RuntimeRequestTarget
 } from "@selfme/unstable-ui-runtime";
 
 const defaultMockTranscripts = [
@@ -413,6 +423,9 @@ export interface ArtifactPreviewDescriptor {
   description?: string;
   fields?: ArtifactPreviewField[];
   openLabel?: string;
+  contentType?: "text" | "summary" | "image";
+  content?: string;
+  thumbnailUri?: string;
 }
 
 export interface ArtifactHandlerContext {
@@ -460,11 +473,41 @@ export interface CapabilityHandler {
 
 export type CapabilityHandlers = Partial<Record<CapabilityRequest["capability"], CapabilityHandler>>;
 
+export interface HostBridgeOpenUrlContext {
+  reason: "artifact-open" | "artifact-download" | "capability-open-url";
+  artifact?: ArtifactRef;
+  capabilityRequest?: CapabilityRequest;
+}
+
+export interface HostBridgeShareContext {
+  reason: "artifact-share" | "capability-share";
+  artifact?: ArtifactRef;
+  capabilityRequest?: CapabilityRequest;
+}
+
+export interface HostBridgeCapabilityContext {
+  defaultPayload?: Record<string, unknown>;
+}
+
+export interface HostBridge {
+  openUrl?: (url: string, context: HostBridgeOpenUrlContext) => void | Promise<void>;
+  share?: (
+    payload: { title?: string; message?: string; url?: string },
+    context: HostBridgeShareContext
+  ) => void | Promise<void>;
+  resolveCapability?: (
+    request: CapabilityRequest,
+    granted: boolean,
+    context: HostBridgeCapabilityContext
+  ) => CapabilityResolution | undefined | Promise<CapabilityResolution | undefined>;
+}
+
 export interface AgentRuntimeViewProps {
   harness: HarnessAdapter;
   voiceShell?: VoiceShellOptions;
   artifactHandlers?: ArtifactHandlers;
   capabilityHandlers?: CapabilityHandlers;
+  hostBridge?: HostBridge;
   renderVoiceShell?: (props: VoiceShellRenderProps) => ReactNode;
   transitionHooks?: RendererTransitionHooks;
   runtimeOptions?: AgentRuntimeOptions;
@@ -544,30 +587,7 @@ interface HistoryRequestGroup {
   latestTitle: string;
 }
 
-interface RequestChainSummary {
-  requestId?: string;
-  source?: RuntimeContextValue["history"][number]["requestSource"];
-  entryCount: number;
-  workspaceCount: number;
-  patchCount: number;
-  resourceCount: number;
-  issueCount: number;
-  actionCount: number;
-  inputCount: number;
-  formCount: number;
-  firstTitle?: string;
-  latestTitle?: string;
-  latestScreenId?: string;
-  latestScreenMode?: RuntimeContextValue["history"][number]["screenMode"];
-  modePath: string;
-  hasResultScreen: boolean;
-  hasTaskScreen: boolean;
-  hasProcessingScreen: boolean;
-  hasCapability: boolean;
-  hasArtifact: boolean;
-  hasForm: boolean;
-  hasError: boolean;
-}
+type RequestChainSummary = RuntimeRequestSummary;
 
 type RequestFlowProfile = "direct" | "staged" | "patched" | "approval" | "form" | "unknown";
 type RequestVerdict = "pass" | "needs-review" | "idle";
@@ -641,6 +661,87 @@ function getCapabilityDisplayName(capability: CapabilityRequest["capability"]) {
       return "Open external link";
     default:
       return "Device capability";
+  }
+}
+
+function getCapabilityBridgeModeLabel(capability: CapabilityRequest["capability"]) {
+  switch (capability) {
+    case "open-url":
+    case "share":
+      return "system bridge";
+    case "microphone":
+    case "camera":
+    case "photo-library":
+    case "location":
+    case "file-picker":
+    default:
+      return "default mock bridge";
+  }
+}
+
+function createCapabilityBridgeFields(request: CapabilityRequest) {
+  const fields = createCapabilityPayloadFields(request.payload);
+
+  fields.unshift(
+    {
+      label: "Capability",
+      value: getCapabilityDisplayName(request.capability)
+    },
+    {
+      label: "Bridge mode",
+      value: getCapabilityBridgeModeLabel(request.capability)
+    }
+  );
+
+  return fields;
+}
+
+function createDefaultMockCapabilityPayload(request: CapabilityRequest) {
+  const basePayload: Record<string, unknown> = {
+    bridge: "renderer-default-mock",
+    capability: request.capability,
+    granted: true,
+    mock: true,
+    resolvedAt: new Date().toISOString()
+  };
+
+  switch (request.capability) {
+    case "microphone":
+      return {
+        ...basePayload,
+        access: "granted",
+        captureMode: "permission-only"
+      };
+    case "camera":
+      return {
+        ...basePayload,
+        access: "granted",
+        captureMode: "image"
+      };
+    case "photo-library":
+      return {
+        ...basePayload,
+        access: "granted",
+        selectionMode: "single"
+      };
+    case "location":
+      return {
+        ...basePayload,
+        access: "granted",
+        precision: "approximate",
+        latitude: 31.2304,
+        longitude: 121.4737
+      };
+    case "file-picker":
+      return {
+        ...basePayload,
+        access: "granted",
+        fileName: "demo-file.txt",
+        mimeType: "text/plain",
+        uri: "file:///mock/demo-file.txt"
+      };
+    default:
+      return basePayload;
   }
 }
 
@@ -747,79 +848,248 @@ function createHistoryLogItem(entry: RuntimeContextValue["history"][number]): Lo
   };
 }
 
-function createCurrentRequestHistoryItems(runtime: RuntimeContextValue, maxItems?: number) {
-  const activeRequestId = runtime.flow.requestId;
-  const items = activeRequestId
-    ? runtime.history.filter((entry) => entry.requestId === activeRequestId)
-    : [];
+function createArtifactLogItem(artifact: ArtifactRef): LogItem {
+  const metaParts: string[] = [artifact.kind, artifact.source];
 
-  return items
-    .slice(-(maxItems ?? 20))
-    .reverse()
-    .map(createHistoryLogItem);
-}
+  if (artifact.mimeType) {
+    metaParts.push(artifact.mimeType);
+  }
 
-function getCurrentRequestEntries(runtime: RuntimeContextValue) {
-  return runtime.flow.requestId
-    ? runtime.history.filter((entry) => entry.requestId === runtime.flow.requestId)
-    : [];
-}
-
-function getLastCompletedRequestEntries(runtime: RuntimeContextValue) {
-  return runtime.flow.lastCompletedRequestId
-    ? runtime.history.filter((entry) => entry.requestId === runtime.flow.lastCompletedRequestId)
-    : [];
-}
-
-function summarizeRequestEntries(
-  entries: RuntimeContextValue["history"],
-  fallbackRequestId?: string
-): RequestChainSummary {
-  const firstEntry = entries[0];
-  const latestEntry = entries[entries.length - 1];
-  const screenModes = entries
-    .map((entry) => entry.screenMode)
-    .filter((mode): mode is NonNullable<typeof mode> => Boolean(mode));
-  const uniqueScreenModes = [...new Set(screenModes)];
-  const workspaceCount = entries.filter((entry) => entry.kind === "workspace").length;
-  const patchCount = entries.filter((entry) => entry.eventType === "screen.patched").length;
-  const resourceCount = entries.filter((entry) => entry.kind === "artifact" || entry.kind === "capability").length;
-  const issueCount = entries.filter((entry) => entry.kind === "error").length;
-  const actionCount = entries.filter((entry) => entry.kind === "action").length;
-  const inputCount = entries.filter((entry) => entry.kind === "input").length;
-  const formCount = entries.filter((entry) => entry.kind === "form").length;
+  if (artifact.expiresAt) {
+    metaParts.push(`expires ${artifact.expiresAt.slice(0, 19)}`);
+  }
 
   return {
-    requestId: latestEntry?.requestId ?? firstEntry?.requestId ?? fallbackRequestId,
-    source: latestEntry?.requestSource ?? firstEntry?.requestSource,
-    entryCount: entries.length,
-    workspaceCount,
-    patchCount,
-    resourceCount,
-    issueCount,
-    actionCount,
-    inputCount,
-    formCount,
-    firstTitle: firstEntry?.title,
-    latestTitle: latestEntry?.title,
-    latestScreenId: latestEntry?.screenId,
-    latestScreenMode: latestEntry?.screenMode,
-    modePath: uniqueScreenModes.length > 0 ? uniqueScreenModes.join(" -> ") : "None",
-    hasResultScreen: screenModes.includes("result"),
-    hasTaskScreen: screenModes.includes("task"),
-    hasProcessingScreen: screenModes.includes("processing"),
-    hasCapability: entries.some((entry) => entry.kind === "capability"),
-    hasArtifact: entries.some((entry) => entry.kind === "artifact"),
-    hasForm: entries.some((entry) => entry.kind === "form"),
-    hasError: entries.some((entry) => entry.kind === "error")
+    id: artifact.id,
+    title: artifact.title ?? artifact.id,
+    body: artifact.preview?.summary ?? artifact.preview?.text ?? artifact.uri,
+    meta: metaParts.join(" · "),
+    tone: artifact.previewable !== false || artifact.openable !== false ? "success" : "default"
   };
 }
 
-function createLastCompletedRequestHistoryItems(runtime: RuntimeContextValue, maxItems?: number) {
-  return getLastCompletedRequestEntries(runtime)
-    .slice(-(maxItems ?? 20))
-    .reverse()
-    .map(createHistoryLogItem);
+function createCapabilityRequestLogItem(request: CapabilityRequest): LogItem {
+  const payloadFields = createCapabilityPayloadFields(request.payload);
+
+  return {
+    id: request.id,
+    title: getCapabilityDisplayName(request.capability),
+    body: request.reason,
+    meta:
+      payloadFields.length > 0
+        ? `${request.capability} · ${payloadFields.length} payload field${payloadFields.length === 1 ? "" : "s"}`
+        : request.capability,
+    tone: "warning"
+  };
+}
+
+function resolveRequestTarget(
+  source: DetailsBlock["source"] | LogBlock["source"] | undefined,
+  requestTarget?: RequestTarget
+): RuntimeRequestTarget {
+  if (
+    source === "runtime.lastCompletedRequest" ||
+    source === "runtime.lastCompletedRequestResources" ||
+    source === "runtime.lastCompletedRequestAssertions" ||
+    source === "runtime.lastCompletedRequestMatrix" ||
+    source === "runtime.lastCompletedRequestVerdict" ||
+    source === "runtime.lastCompletedRequestHistory" ||
+    source === "runtime.lastCompletedRequestResourceHistory"
+  ) {
+    return "lastCompleted";
+  }
+
+  if (
+    source === "runtime.currentRequest" ||
+    source === "runtime.currentRequestResources" ||
+    source === "runtime.currentRequestAssertions" ||
+    source === "runtime.currentRequestMatrix" ||
+    source === "runtime.currentRequestVerdict" ||
+    source === "runtime.currentRequestHistory" ||
+    source === "runtime.currentRequestResourceHistory"
+  ) {
+    return "current";
+  }
+
+  return requestTarget ?? "current";
+}
+
+function getResolvedRequestChain(
+  runtime: RuntimeContextValue,
+  source: DetailsBlock["source"] | LogBlock["source"] | undefined,
+  requestTarget?: RequestTarget
+) {
+  return resolveRuntimeRequestChain(runtime, resolveRequestTarget(source, requestTarget));
+}
+
+function resolveRequestEvaluationMode(
+  runtime: RuntimeContextValue,
+  source: DetailsBlock["source"] | LogBlock["source"] | undefined,
+  requestTarget: RequestTarget | undefined,
+  summary: RequestChainSummary
+): "current" | "completed" {
+  const resolvedTarget = resolveRequestTarget(source, requestTarget);
+
+  if (
+    source === "runtime.lastCompletedRequestAssertions" ||
+    source === "runtime.lastCompletedRequestMatrix" ||
+    source === "runtime.lastCompletedRequestVerdict" ||
+    source === "runtime.lastCompletedRequest" ||
+    source === "runtime.lastCompletedRequestResources" ||
+    source === "runtime.lastCompletedRequestHistory" ||
+    source === "runtime.lastCompletedRequestResourceHistory" ||
+    resolvedTarget === "lastCompleted"
+  ) {
+    return "completed";
+  }
+
+  if (resolvedTarget === "current") {
+    return "current";
+  }
+
+  if (summary.requestId && summary.requestId === runtime.flow.lastCompletedRequestId) {
+    return "completed";
+  }
+
+  return summary.hasResultScreen && summary.requestId !== runtime.flow.requestId ? "completed" : "current";
+}
+
+function createRequestResourceDetailItems(
+  entries: RuntimeContextValue["history"],
+  requestId?: string
+): DetailItem[] {
+  const resourceEntries = getRuntimeRequestResourceEntries(entries);
+  const artifactEntries = resourceEntries.filter((entry) => entry.kind === "artifact");
+  const capabilityEntries = resourceEntries.filter((entry) => entry.kind === "capability");
+  const latestResourceEntry = resourceEntries[resourceEntries.length - 1];
+  const latestArtifactEntry = artifactEntries[artifactEntries.length - 1];
+  const latestCapabilityEntry = capabilityEntries[capabilityEntries.length - 1];
+
+  return [
+    {
+      id: `${requestId ?? "request"}-resource-request-id`,
+      label: "Request ID",
+      value: requestId ?? "None"
+    },
+    {
+      id: `${requestId ?? "request"}-resource-events`,
+      label: "Resource events",
+      value: String(resourceEntries.length),
+      tone: resourceEntries.length > 0 ? "success" : "default"
+    },
+    {
+      id: `${requestId ?? "request"}-artifact-events`,
+      label: "Artifact events",
+      value: String(artifactEntries.length),
+      tone: artifactEntries.length > 0 ? "success" : "default"
+    },
+    {
+      id: `${requestId ?? "request"}-capability-events`,
+      label: "Capability events",
+      value: String(capabilityEntries.length),
+      tone: capabilityEntries.length > 0 ? "warning" : "default"
+    },
+    {
+      id: `${requestId ?? "request"}-latest-resource`,
+      label: "Latest resource event",
+      value: latestResourceEntry?.title ?? "None"
+    },
+    {
+      id: `${requestId ?? "request"}-latest-artifact`,
+      label: "Latest artifact",
+      value: latestArtifactEntry?.title ?? "None"
+    },
+    {
+      id: `${requestId ?? "request"}-latest-capability`,
+      label: "Latest capability",
+      value: latestCapabilityEntry?.title ?? "None"
+    }
+  ];
+}
+
+function createRequestIndexSummaryItems(runtime: RuntimeContextValue): DetailItem[] {
+  const groups = getRuntimeRequestCatalog(runtime.history);
+  const summaries = groups.map((group) => group.summary);
+  const completedCount = summaries.filter((summary) => summary.hasResultScreen).length;
+  const approvalCount = summaries.filter((summary) => inferRequestFlowProfile(summary) === "approval").length;
+  const patchedCount = summaries.filter((summary) => inferRequestFlowProfile(summary) === "patched").length;
+  const stagedCount = summaries.filter((summary) => inferRequestFlowProfile(summary) === "staged").length;
+  const latestSummary = summaries[0];
+
+  return [
+    {
+      id: "request-index-total",
+      label: "Indexed requests",
+      value: String(summaries.length),
+      tone: summaries.length > 0 ? "success" : "default"
+    },
+    {
+      id: "request-index-completed",
+      label: "Completed",
+      value: String(completedCount),
+      tone: completedCount > 0 ? "success" : "default"
+    },
+    {
+      id: "request-index-active",
+      label: "Active request",
+      value: runtime.flow.requestId ?? "None"
+    },
+    {
+      id: "request-index-last-completed",
+      label: "Last completed",
+      value: runtime.flow.lastCompletedRequestId ?? "None"
+    },
+    {
+      id: "request-index-approval",
+      label: "Approval flows",
+      value: String(approvalCount)
+    },
+    {
+      id: "request-index-patched",
+      label: "Patched flows",
+      value: String(patchedCount)
+    },
+    {
+      id: "request-index-staged",
+      label: "Staged flows",
+      value: String(stagedCount)
+    },
+    {
+      id: "request-index-latest",
+      label: "Latest chain",
+      value: latestSummary?.latestTitle ?? "None"
+    }
+  ];
+}
+
+function createRequestIndexLogItems(runtime: RuntimeContextValue, maxItems?: number) {
+  return getRuntimeRequestCatalog(runtime.history)
+    .map((group) => {
+      const summary = group.summary;
+      const profile = inferRequestFlowProfile(summary);
+
+      return {
+        id: group.requestId,
+        title: summary.latestTitle ?? group.entries[group.entries.length - 1]?.title ?? group.requestId,
+        body: `${summary.modePath} · ${summary.entryCount} event(s) · ${summary.resourceCount} resource event(s)`,
+        meta: [
+          formatHistoryRequestId(summary.requestId),
+          formatHistoryRequestSource(summary.source),
+          getRequestFlowProfileLabel(profile)
+        ]
+          .filter(Boolean)
+          .join(" · "),
+        tone:
+          summary.issueCount > 0
+            ? "danger"
+            : summary.hasResultScreen
+              ? "success"
+              : profile === "approval" || profile === "patched"
+                ? "warning"
+                : "default"
+      } satisfies LogItem;
+    })
+    .slice(0, maxItems ?? 20);
 }
 
 function getRequestSummarySignal(summary: RequestChainSummary) {
@@ -1341,7 +1611,7 @@ function createRuntimeDetailsBlock(block: DetailsBlock, runtime: RuntimeContextV
         label: "Flow profile",
         value: getRequestFlowProfileLabel(
           inferRequestFlowProfile(
-            summarizeRequestEntries(getCurrentRequestEntries(runtime), runtime.flow.requestId)
+            summarizeRuntimeRequestEntries(getRuntimeCurrentRequestEntries(runtime), runtime.flow.requestId)
           )
         )
       },
@@ -1397,6 +1667,71 @@ function createRuntimeDetailsBlock(block: DetailsBlock, runtime: RuntimeContextV
         value: String(runtime.flow.issueCount)
       }
     ];
+  } else if (block.source === "runtime.requestIndexSummary") {
+    items = createRequestIndexSummaryItems(runtime);
+  } else if (block.source === "runtime.bridge") {
+    const previewableArtifacts = runtime.artifacts.filter((artifact) => artifact.previewable !== false);
+    const openableArtifacts = runtime.artifacts.filter((artifact) => artifact.openable !== false);
+    const downloadableArtifacts = runtime.artifacts.filter(canDownloadArtifact);
+    const shareableArtifacts = runtime.artifacts.filter(canShareArtifact);
+    const latestArtifact = runtime.artifacts[runtime.artifacts.length - 1];
+    const activeCapability = runtime.capabilityRequests[0];
+
+    items = [
+      {
+        id: `${block.id}-artifact-count`,
+        label: "Artifacts",
+        value: String(runtime.artifacts.length),
+        tone: runtime.artifacts.length > 0 ? "success" : "default"
+      },
+      {
+        id: `${block.id}-previewable-count`,
+        label: "Previewable",
+        value: String(previewableArtifacts.length),
+        tone: previewableArtifacts.length > 0 ? "success" : "default"
+      },
+      {
+        id: `${block.id}-openable-count`,
+        label: "Openable",
+        value: String(openableArtifacts.length),
+        tone: openableArtifacts.length > 0 ? "success" : "default"
+      },
+      {
+        id: `${block.id}-shareable-count`,
+        label: "Shareable",
+        value: String(shareableArtifacts.length),
+        tone: shareableArtifacts.length > 0 ? "success" : "default"
+      },
+      {
+        id: `${block.id}-downloadable-count`,
+        label: "Downloadable",
+        value: String(downloadableArtifacts.length),
+        tone: downloadableArtifacts.length > 0 ? "success" : "default"
+      },
+      {
+        id: `${block.id}-pending-capabilities`,
+        label: "Pending capabilities",
+        value: String(runtime.capabilityRequests.length),
+        tone: runtime.capabilityRequests.length > 0 ? "warning" : "success"
+      },
+      {
+        id: `${block.id}-active-capability`,
+        label: "Active capability",
+        value: activeCapability ? getCapabilityDisplayName(activeCapability.capability) : "None",
+        tone: activeCapability ? "warning" : "default"
+      },
+      {
+        id: `${block.id}-latest-artifact`,
+        label: "Latest artifact",
+        value: latestArtifact?.title ?? latestArtifact?.id ?? "None"
+      },
+      {
+        id: `${block.id}-artifact-lock`,
+        label: "Artifact access",
+        value: runtime.interaction.artifacts,
+        tone: getInteractionTone(runtime.interaction.artifacts)
+      }
+    ];
   } else if (block.source === "runtime.interaction") {
     items = [
       {
@@ -1435,128 +1770,51 @@ function createRuntimeDetailsBlock(block: DetailsBlock, runtime: RuntimeContextV
         value: runtime.interaction.reason ?? "None"
       }
     ];
-  } else if (block.source === "runtime.session") {
-    items = [
-      {
-        id: `${block.id}-session-id`,
-        label: "Session ID",
-        value: runtime.sessionId ?? "None"
-      },
-      {
-        id: `${block.id}-runtime-phase`,
-        label: "Runtime phase",
-        value: runtime.phase
-      },
-      {
-        id: `${block.id}-status`,
-        label: "Status",
-        value: runtime.status
-      },
-      {
-        id: `${block.id}-screen-title`,
-        label: "Screen title",
-        value: runtime.screen?.title ?? "None"
-      },
-      {
-        id: `${block.id}-history-count`,
-        label: "History entries",
-        value: String(runtime.history.length)
-      },
-      {
-        id: `${block.id}-event-count`,
-        label: "Event entries",
-        value: String(runtime.eventLog.length)
-      }
-    ];
-  } else if (block.source === "runtime.currentRequest") {
-    const requestEntries = getCurrentRequestEntries(runtime);
-    const summary = summarizeRequestEntries(requestEntries, runtime.flow.requestId);
-    const profile = inferRequestFlowProfile(summary);
+  } else if (block.source === "runtime.lastCapabilityResolution") {
+    const resolutionEntry = getRuntimeLastCapabilityResolutionEntry(runtime.history);
 
     items = [
       {
-        id: `${block.id}-request-id`,
-        label: "Request ID",
-        value: runtime.flow.requestId ?? "None"
+        id: `${block.id}-title`,
+        label: "State",
+        value: resolutionEntry ? resolutionEntry.title : "No capability resolution recorded yet.",
+        tone: resolutionEntry ? "success" : "default"
       },
       {
-        id: `${block.id}-source`,
+        id: `${block.id}-request-id`,
+        label: "Request ID",
+        value: resolutionEntry?.meta ?? "None"
+      },
+      {
+        id: `${block.id}-request-source`,
         label: "Source",
-        value: runtime.flow.source ?? "None"
+        value: formatHistoryRequestSource(resolutionEntry?.requestSource) ?? "None"
       },
       {
-        id: `${block.id}-profile`,
-        label: "Flow profile",
-        value: getRequestFlowProfileLabel(profile)
+        id: `${block.id}-timestamp`,
+        label: "Timestamp",
+        value: resolutionEntry ? formatHistoryTimestamp(resolutionEntry.timestamp) : "None"
       },
       {
-        id: `${block.id}-phase`,
-        label: "Flow phase",
-        value: runtime.flow.phase,
-        tone: runtime.flow.phase === "complete" ? "success" : runtime.flow.phase === "active" ? "warning" : "default"
-      },
-      {
-        id: `${block.id}-screen-mode`,
-        label: "Screen mode",
-        value: runtime.flow.screenMode
-      },
-      {
-        id: `${block.id}-screen-id`,
-        label: "Screen ID",
-        value: runtime.flow.screenId ?? "None"
-      },
-      {
-        id: `${block.id}-entry-count`,
-        label: "History entries",
-        value: String(summary.entryCount)
-      },
-      {
-        id: `${block.id}-latest-entry`,
-        label: "Latest entry",
-        value: summary.latestTitle ?? "None"
-      },
-      {
-        id: `${block.id}-mode-path`,
-        label: "Mode path",
-        value: summary.modePath
-      },
-      {
-        id: `${block.id}-workspace-count`,
-        label: "Workspace events",
-        value: String(summary.workspaceCount)
-      },
-      {
-        id: `${block.id}-patch-count`,
-        label: "Patch events",
-        value: String(summary.patchCount)
-      },
-      {
-        id: `${block.id}-resource-count`,
-        label: "Resource events",
-        value: String(summary.resourceCount)
-      },
-      {
-        id: `${block.id}-request-signal`,
-        label: "Chain signal",
-        value: summary.hasResultScreen ? "Result released" : summary.entryCount > 0 ? "Still evolving" : "No active chain",
-        tone: getRequestSummarySignal(summary)
-      },
-      {
-        id: `${block.id}-last-completed`,
-        label: "Last completed",
-        value: runtime.flow.lastCompletedRequestId ?? "None"
+        id: `${block.id}-payload`,
+        label: "Payload",
+        value: resolutionEntry?.body ?? "No payload recorded."
       }
     ];
-  } else if (block.source === "runtime.lastCompletedRequest") {
-    const requestEntries = getLastCompletedRequestEntries(runtime);
-    const summary = summarizeRequestEntries(requestEntries, runtime.flow.lastCompletedRequestId);
+  } else if (
+    block.source === "runtime.request" ||
+    block.source === "runtime.currentRequest" ||
+    block.source === "runtime.lastCompletedRequest"
+  ) {
+    const chain = getResolvedRequestChain(runtime, block.source, block.requestTarget);
+    const summary = chain.summary;
     const profile = inferRequestFlowProfile(summary);
 
     items = [
       {
         id: `${block.id}-request-id`,
         label: "Request ID",
-        value: runtime.flow.lastCompletedRequestId ?? "None"
+        value: chain.requestId ?? "None"
       },
       {
         id: `${block.id}-source`,
@@ -1616,33 +1874,81 @@ function createRuntimeDetailsBlock(block: DetailsBlock, runtime: RuntimeContextV
       {
         id: `${block.id}-request-signal`,
         label: "Chain signal",
-        value: summary.hasResultScreen ? "Completed with result" : summary.hasError ? "Completed with issues" : "Completed",
+        value: summary.hasResultScreen ? "Completed with result" : summary.entryCount > 0 ? "Still evolving" : "No request chain",
         tone: getRequestSummarySignal(summary)
       }
     ];
-  } else if (block.source === "runtime.currentRequestAssertions") {
-    const requestEntries = getCurrentRequestEntries(runtime);
-    const summary = summarizeRequestEntries(requestEntries, runtime.flow.requestId);
-    items = createCurrentRequestAssertionItems(runtime, summary);
+  } else if (block.source === "runtime.currentRequestResources") {
+    const chain = getResolvedRequestChain(runtime, block.source, block.requestTarget);
+    items = createRequestResourceDetailItems(chain.entries, chain.requestId);
+  } else if (block.source === "runtime.lastCompletedRequestResources" || block.source === "runtime.requestResources") {
+    const chain = getResolvedRequestChain(runtime, block.source, block.requestTarget);
+    items = createRequestResourceDetailItems(chain.entries, chain.requestId);
+  } else if (block.source === "runtime.session") {
+    items = [
+      {
+        id: `${block.id}-session-id`,
+        label: "Session ID",
+        value: runtime.sessionId ?? "None"
+      },
+      {
+        id: `${block.id}-runtime-phase`,
+        label: "Runtime phase",
+        value: runtime.phase
+      },
+      {
+        id: `${block.id}-status`,
+        label: "Status",
+        value: runtime.status
+      },
+      {
+        id: `${block.id}-screen-title`,
+        label: "Screen title",
+        value: runtime.screen?.title ?? "None"
+      },
+      {
+        id: `${block.id}-history-count`,
+        label: "History entries",
+        value: String(runtime.history.length)
+      },
+      {
+        id: `${block.id}-event-count`,
+        label: "Event entries",
+        value: String(runtime.eventLog.length)
+      }
+    ];
+  } else if (block.source === "runtime.currentRequestAssertions" || block.source === "runtime.requestAssertions") {
+    const chain = getResolvedRequestChain(runtime, block.source, block.requestTarget);
+    const summary = chain.summary;
+    items =
+      resolveRequestEvaluationMode(runtime, block.source, block.requestTarget, summary) === "completed"
+        ? createCompletedRequestAssertionItems(summary)
+        : createCurrentRequestAssertionItems(runtime, summary);
   } else if (block.source === "runtime.lastCompletedRequestAssertions") {
-    const requestEntries = getLastCompletedRequestEntries(runtime);
-    const summary = summarizeRequestEntries(requestEntries, runtime.flow.lastCompletedRequestId);
+    const chain = getResolvedRequestChain(runtime, block.source, block.requestTarget);
+    const summary = chain.summary;
     items = createCompletedRequestAssertionItems(summary);
-  } else if (block.source === "runtime.currentRequestMatrix") {
-    const requestEntries = getCurrentRequestEntries(runtime);
-    const summary = summarizeRequestEntries(requestEntries, runtime.flow.requestId);
-    items = createRequestMatrixItems(summary, "current");
+  } else if (block.source === "runtime.currentRequestMatrix" || block.source === "runtime.requestMatrix") {
+    const chain = getResolvedRequestChain(runtime, block.source, block.requestTarget);
+    const summary = chain.summary;
+    items = createRequestMatrixItems(
+      summary,
+      resolveRequestEvaluationMode(runtime, block.source, block.requestTarget, summary)
+    );
   } else if (block.source === "runtime.lastCompletedRequestMatrix") {
-    const requestEntries = getLastCompletedRequestEntries(runtime);
-    const summary = summarizeRequestEntries(requestEntries, runtime.flow.lastCompletedRequestId);
+    const chain = getResolvedRequestChain(runtime, block.source, block.requestTarget);
+    const summary = chain.summary;
     items = createRequestMatrixItems(summary, "completed");
-  } else if (block.source === "runtime.currentRequestVerdict") {
-    const requestEntries = getCurrentRequestEntries(runtime);
-    const summary = summarizeRequestEntries(requestEntries, runtime.flow.requestId);
-    items = createRequestVerdictItems(summary, "current");
+  } else if (block.source === "runtime.currentRequestVerdict" || block.source === "runtime.requestVerdict") {
+    const chain = getResolvedRequestChain(runtime, block.source, block.requestTarget);
+    const summary = chain.summary;
+    items = createRequestVerdictItems(
+      summary,
+      resolveRequestEvaluationMode(runtime, block.source, block.requestTarget, summary)
+    );
   } else if (block.source === "runtime.lastCompletedRequestVerdict") {
-    const requestEntries = getLastCompletedRequestEntries(runtime);
-    const summary = summarizeRequestEntries(requestEntries, runtime.flow.lastCompletedRequestId);
+    const chain = getResolvedRequestChain(runtime, block.source, block.requestTarget);
+    const summary = chain.summary;
     items = createRequestVerdictItems(summary, "completed");
   }
 
@@ -1673,22 +1979,102 @@ function resolveRuntimeLeafBlock(block: LeafBlock, runtime: RuntimeContextValue)
     return historyLogBlock;
   }
 
-  if (block.source === "runtime.currentRequestHistory") {
+  if (block.source === "runtime.requestIndex") {
+    const requestIndexLogBlock: LogBlock = {
+      ...block,
+      items: createRequestIndexLogItems(runtime, block.maxItems)
+    };
+
+    return requestIndexLogBlock;
+  }
+
+  if (block.source === "runtime.capabilityHistory") {
+    const capabilityHistoryLogBlock: LogBlock = {
+      ...block,
+      items: getRuntimeCapabilityHistoryEntries(runtime.history)
+        .slice()
+        .reverse()
+        .slice(0, block.maxItems ?? 20)
+        .map(createHistoryLogItem)
+    };
+
+    return capabilityHistoryLogBlock;
+  }
+
+  if (block.source === "runtime.artifacts") {
+    const artifactLogBlock: LogBlock = {
+      ...block,
+      items: [...runtime.artifacts]
+        .reverse()
+        .slice(0, block.maxItems ?? 20)
+        .map(createArtifactLogItem)
+    };
+
+    return artifactLogBlock;
+  }
+
+  if (block.source === "runtime.capabilityRequests") {
+    const capabilityLogBlock: LogBlock = {
+      ...block,
+      items: [...runtime.capabilityRequests]
+        .reverse()
+        .slice(0, block.maxItems ?? 20)
+        .map(createCapabilityRequestLogItem)
+    };
+
+    return capabilityLogBlock;
+  }
+
+  if (block.source === "runtime.currentRequestHistory" || block.source === "runtime.requestHistory") {
+    const chain = getResolvedRequestChain(runtime, block.source, block.requestTarget);
     const currentRequestHistoryLogBlock: LogBlock = {
       ...block,
-      items: createCurrentRequestHistoryItems(runtime, block.maxItems)
+      items: chain.entries
+        .slice(-(block.maxItems ?? 20))
+        .reverse()
+        .map(createHistoryLogItem)
     };
 
     return currentRequestHistoryLogBlock;
   }
 
+  if (block.source === "runtime.currentRequestResourceHistory" || block.source === "runtime.requestResourceHistory") {
+    const chain = getResolvedRequestChain(runtime, block.source, block.requestTarget);
+    const currentRequestResourceHistoryLogBlock: LogBlock = {
+      ...block,
+      items: getRuntimeRequestResourceEntries(chain.entries)
+        .slice(-(block.maxItems ?? 20))
+        .reverse()
+        .map(createHistoryLogItem)
+    };
+
+    return currentRequestResourceHistoryLogBlock;
+  }
+
   if (block.source === "runtime.lastCompletedRequestHistory") {
+    const chain = getResolvedRequestChain(runtime, block.source, block.requestTarget);
     const lastCompletedRequestHistoryLogBlock: LogBlock = {
       ...block,
-      items: createLastCompletedRequestHistoryItems(runtime, block.maxItems)
+      items: chain.entries
+        .slice(-(block.maxItems ?? 20))
+        .reverse()
+        .map(createHistoryLogItem)
     };
 
     return lastCompletedRequestHistoryLogBlock;
+  }
+
+  if (block.source === "runtime.lastCompletedRequestResourceHistory") {
+    const chain = getResolvedRequestChain(runtime, block.source, block.requestTarget);
+    const lastCompletedRequestResourceHistoryLogBlock: LogBlock = {
+      ...block,
+      items: getRuntimeRequestResourceEntries(chain.entries)
+        .slice(-(block.maxItems ?? 20))
+        .reverse()
+        .map(createHistoryLogItem)
+    };
+
+    return lastCompletedRequestResourceHistoryLogBlock;
   }
 
   const runtimeLogBlock: LogBlock = {
@@ -2098,7 +2484,7 @@ function getHistoryGroupKinds(group: HistoryRequestGroup) {
 }
 
 function getHistoryGroupSummary(group: HistoryRequestGroup) {
-  const summary = summarizeRequestEntries(group.entries, group.requestId);
+  const summary = summarizeRuntimeRequestEntries(group.entries, group.requestId);
   const parts = [
     `${summary.workspaceCount} workspace`,
     `${summary.patchCount} patch`,
@@ -2351,12 +2737,14 @@ function AgentRuntimeContent({
   voiceShell,
   artifactHandlers,
   capabilityHandlers,
+  hostBridge,
   renderVoiceShell,
   transitionHooks
 }: {
   voiceShell?: VoiceShellOptions;
   artifactHandlers?: ArtifactHandlers;
   capabilityHandlers?: CapabilityHandlers;
+  hostBridge?: HostBridge;
   renderVoiceShell?: (props: VoiceShellRenderProps) => ReactNode;
   transitionHooks?: RendererTransitionHooks;
 }) {
@@ -2573,6 +2961,11 @@ function AgentRuntimeContent({
   function createDefaultArtifactPreview(resource: ArtifactRef): ArtifactPreviewDescriptor {
     const fields: ArtifactPreviewField[] = [];
     const uri = resource.uri;
+    const preview = resource.preview;
+
+    if (preview?.fields?.length) {
+      fields.push(...preview.fields);
+    }
 
     if ((resource.kind === "link" || resource.kind === "html") && uri) {
       try {
@@ -2600,6 +2993,13 @@ function AgentRuntimeContent({
       });
     }
 
+    if (preview?.summary) {
+      fields.push({
+        label: "Summary",
+        value: preview.summary
+      });
+    }
+
     if (fields.length === 0) {
       fields.push({
         label: "Preview",
@@ -2609,14 +3009,17 @@ function AgentRuntimeContent({
 
     return {
       title: resource.title,
-      description: getArtifactKindDescription(resource.kind),
+      description: preview?.summary ?? getArtifactKindDescription(resource.kind),
       fields,
-      openLabel: getArtifactOpenLabel(resource.kind)
+      openLabel: getArtifactOpenLabel(resource.kind),
+      contentType: preview?.thumbnailUri ? "image" : preview?.text ? "text" : preview?.summary ? "summary" : undefined,
+      content: preview?.text ?? preview?.summary,
+      thumbnailUri: preview?.thumbnailUri
     };
   }
 
   function createDefaultCapabilityPrompt(request: CapabilityRequest): CapabilityPromptDescriptor {
-    const fields = createCapabilityPayloadFields(request.payload);
+    const fields = createCapabilityBridgeFields(request);
 
     switch (request.capability) {
       case "open-url":
@@ -2640,29 +3043,45 @@ function AgentRuntimeContent({
       case "file-picker":
         return {
           title: getCapabilityDisplayName(request.capability),
-          description: "The harness is asking the client to pick a local file and return it through the bridge.",
+          description: "No host-specific picker is registered, so the default bridge will return a mock file selection payload.",
           reasonLabel: "Reason",
-          primaryLabel: "Continue",
+          primaryLabel: "Resolve with mock file",
           secondaryLabel: "Not now",
           fields
         };
       case "location":
         return {
           title: getCapabilityDisplayName(request.capability),
-          description: "The harness is asking for location context from the device bridge.",
+          description: "No host-specific location bridge is registered, so the default bridge will return an approximate mock location payload.",
           reasonLabel: "Reason",
-          primaryLabel: "Allow access",
+          primaryLabel: "Resolve with mock location",
           secondaryLabel: "Not now",
           fields
         };
       case "camera":
+        return {
+          title: getCapabilityDisplayName(request.capability),
+          description: "No host-specific camera bridge is registered, so the default bridge will return a mock capture resolution payload.",
+          reasonLabel: "Reason",
+          primaryLabel: "Resolve with mock capture",
+          secondaryLabel: "Not now",
+          fields
+        };
       case "photo-library":
+        return {
+          title: getCapabilityDisplayName(request.capability),
+          description: "No host-specific photo-library bridge is registered, so the default bridge will return a mock media selection payload.",
+          reasonLabel: "Reason",
+          primaryLabel: "Resolve with mock media",
+          secondaryLabel: "Not now",
+          fields
+        };
       case "microphone":
         return {
           title: getCapabilityDisplayName(request.capability),
-          description: "The harness is asking the client runtime to resolve a device-level permission or capture action.",
+          description: "No host-specific microphone bridge is registered, so the default bridge will return a mock permission resolution payload.",
           reasonLabel: "Reason",
-          primaryLabel: "Allow access",
+          primaryLabel: "Resolve with mock access",
           secondaryLabel: "Not now",
           fields
         };
@@ -2683,12 +3102,35 @@ function AgentRuntimeContent({
       throw new Error("This artifact cannot be opened yet.");
     }
 
+    if (hostBridge?.openUrl) {
+      await hostBridge.openUrl(resource.uri, {
+        reason: "artifact-open",
+        artifact: resource
+      });
+      return;
+    }
+
     await Linking.openURL(resource.uri);
   }
 
   async function shareArtifactWithSystem(resource: ArtifactRef) {
     if (!canShareArtifact(resource) || !resource.uri) {
       throw new Error("This artifact cannot be shared yet.");
+    }
+
+    if (hostBridge?.share) {
+      await hostBridge.share(
+        {
+          title: resource.title,
+          message: resource.uri,
+          url: resource.uri
+        },
+        {
+          reason: "artifact-share",
+          artifact: resource
+        }
+      );
+      return;
     }
 
     await Share.share({
@@ -2700,6 +3142,14 @@ function AgentRuntimeContent({
   async function downloadArtifactWithSystem(resource: ArtifactRef) {
     if (!canDownloadArtifact(resource) || !resource.uri) {
       throw new Error("This artifact cannot be downloaded yet.");
+    }
+
+    if (hostBridge?.openUrl) {
+      await hostBridge.openUrl(resource.uri, {
+        reason: "artifact-download",
+        artifact: resource
+      });
+      return;
     }
 
     await Linking.openURL(resource.uri);
@@ -2772,10 +3222,18 @@ function AgentRuntimeContent({
         throw new Error("The capability payload must include a url or uri for open-url.");
       }
 
-      await Linking.openURL(url);
+      if (hostBridge?.openUrl) {
+        await hostBridge.openUrl(url, {
+          reason: "capability-open-url",
+          capabilityRequest: request
+        });
+      } else {
+        await Linking.openURL(url);
+      }
+
       return {
         payload: {
-          bridge: "renderer-default",
+          bridge: hostBridge?.openUrl ? "host-bridge" : "renderer-default",
           opened: true,
           url
         }
@@ -2792,14 +3250,28 @@ function AgentRuntimeContent({
         throw new Error("The capability payload must include title, message, or url for share.");
       }
 
-      await Share.share({
-        title,
-        message: composedMessage || title || url || ""
-      });
+      if (hostBridge?.share) {
+        await hostBridge.share(
+          {
+            title,
+            message: composedMessage || title || url || "",
+            url
+          },
+          {
+            reason: "capability-share",
+            capabilityRequest: request
+          }
+        );
+      } else {
+        await Share.share({
+          title,
+          message: composedMessage || title || url || ""
+        });
+      }
 
       return {
         payload: {
-          bridge: "renderer-default",
+          bridge: hostBridge?.share ? "host-bridge" : "renderer-default",
           shared: true,
           title,
           url
@@ -2807,7 +3279,21 @@ function AgentRuntimeContent({
       };
     }
 
-    return undefined;
+    const defaultPayload = createDefaultMockCapabilityPayload(request);
+
+    if (hostBridge?.resolveCapability) {
+      const resolution = await hostBridge.resolveCapability(request, true, {
+        defaultPayload
+      });
+
+      if (resolution) {
+        return resolution;
+      }
+    }
+
+    return {
+      payload: defaultPayload
+    };
   }
 
   async function handleArtifactRequest(resource: ArtifactRef, mode: "preview" | "open" | "share" | "download") {
@@ -2844,9 +3330,25 @@ function AgentRuntimeContent({
     setCapabilityBridgeError(undefined);
 
     try {
-      const handlerResult = granted
-        ? await (getCapabilityHandler(request)?.resolve?.(request, granted) ?? resolveCapabilityWithDefaultBridge(request))
-        : await getCapabilityHandler(request)?.resolve?.(request, granted);
+      let handlerResult: CapabilityResolution | undefined;
+
+      if (granted) {
+        handlerResult = await (
+          getCapabilityHandler(request)?.resolve?.(request, granted) ?? resolveCapabilityWithDefaultBridge(request)
+        );
+      } else {
+        handlerResult =
+          (await getCapabilityHandler(request)?.resolve?.(request, granted)) ??
+          (await hostBridge?.resolveCapability?.(request, granted, {
+            defaultPayload: {
+              bridge: "renderer-default-mock",
+              capability: request.capability,
+              granted: false,
+              mock: true,
+              resolvedAt: new Date().toISOString()
+            }
+          }));
+      }
 
       await runtime.sendClientEvent({
         type: "capability.resolved",
@@ -3445,6 +3947,24 @@ function ArtifactPreviewModal({ preview, onClose, onOpen, onShare, onDownload }:
           Kind: {artifact?.kind ?? "-"} · Source: {artifact?.source ?? "-"}
         </Text>
         {preview?.preview.description ? <Text style={styles.modalMeta}>{preview.preview.description}</Text> : null}
+        {preview?.preview.thumbnailUri ? (
+          <View style={styles.modalPreviewSurface}>
+            <Text style={styles.modalPreviewLabel}>Thumbnail</Text>
+            <Text style={styles.modalPreviewText}>{preview.preview.thumbnailUri}</Text>
+          </View>
+        ) : null}
+        {preview?.preview.content ? (
+          <View style={styles.modalPreviewSurface}>
+            <Text style={styles.modalPreviewLabel}>
+              {preview.preview.contentType === "text"
+                ? "Content"
+                : preview.preview.contentType === "image"
+                  ? "Image"
+                  : "Preview"}
+            </Text>
+            <Text style={styles.modalPreviewText}>{preview.preview.content}</Text>
+          </View>
+        ) : null}
         {fields.map((field) => (
           <View key={`${field.label}-${field.value}`} style={styles.modalPreviewSurface}>
             <Text style={styles.modalPreviewLabel}>{field.label}</Text>
@@ -3589,6 +4109,7 @@ export function AgentRuntimeView({
   voiceShell,
   artifactHandlers,
   capabilityHandlers,
+  hostBridge,
   renderVoiceShell,
   transitionHooks,
   runtimeOptions
@@ -3599,6 +4120,7 @@ export function AgentRuntimeView({
         voiceShell={voiceShell}
         artifactHandlers={artifactHandlers}
         capabilityHandlers={capabilityHandlers}
+        hostBridge={hostBridge}
         renderVoiceShell={renderVoiceShell}
         transitionHooks={transitionHooks}
       />

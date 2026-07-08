@@ -90,7 +90,50 @@ export interface RuntimeRequestFlowState {
   issueCount: number;
 }
 
+export interface RuntimeRequestSummary {
+  requestId?: string;
+  source?: RuntimeRequestSource;
+  entryCount: number;
+  workspaceCount: number;
+  patchCount: number;
+  resourceCount: number;
+  issueCount: number;
+  actionCount: number;
+  inputCount: number;
+  formCount: number;
+  firstTitle?: string;
+  latestTitle?: string;
+  latestScreenId?: string;
+  latestScreenMode?: ScreenMode;
+  modePath: string;
+  hasResultScreen: boolean;
+  hasTaskScreen: boolean;
+  hasProcessingScreen: boolean;
+  hasCapability: boolean;
+  hasArtifact: boolean;
+  hasForm: boolean;
+  hasError: boolean;
+}
+
+export interface RuntimeRequestGroup {
+  requestId: string;
+  source?: RuntimeRequestSource;
+  entries: RuntimeHistoryEntry[];
+  summary: RuntimeRequestSummary;
+}
+
 type RuntimeRequestSource = "voice" | "input" | "action" | "form";
+
+export type RuntimeRequestTarget = "current" | "lastCompleted" | string;
+
+export interface RuntimeResolvedRequestChain {
+  target: RuntimeRequestTarget;
+  requestId?: string;
+  source?: RuntimeRequestSource;
+  entries: RuntimeHistoryEntry[];
+  resources: RuntimeHistoryEntry[];
+  summary: RuntimeRequestSummary;
+}
 
 interface RuntimeMachineContext {
   sessionId?: string;
@@ -437,6 +480,174 @@ function summarizeRuntimeRequestHistory(history: RuntimeHistoryEntry[], requestI
     patchEventCount: entries.filter((entry) => entry.eventType === "screen.patched").length,
     resourceEventCount: entries.filter((entry) => entry.kind === "artifact" || entry.kind === "capability").length,
     issueCount: entries.filter((entry) => entry.kind === "error").length
+  };
+}
+
+export function getRuntimeRequestEntries(
+  history: RuntimeHistoryEntry[],
+  requestId?: string
+) {
+  return requestId ? history.filter((entry) => entry.requestId === requestId) : [];
+}
+
+export function getRuntimeRequestResourceEntries(entries: RuntimeHistoryEntry[]) {
+  return entries.filter((entry) => entry.kind === "artifact" || entry.kind === "capability");
+}
+
+export function summarizeRuntimeRequestEntries(
+  entries: RuntimeHistoryEntry[],
+  fallbackRequestId?: string
+): RuntimeRequestSummary {
+  const firstEntry = entries[0];
+  const latestEntry = entries[entries.length - 1];
+  const screenModes = entries
+    .map((entry) => entry.screenMode)
+    .filter((mode): mode is NonNullable<typeof mode> => Boolean(mode));
+  const uniqueScreenModes = [...new Set(screenModes)];
+  const workspaceCount = entries.filter((entry) => entry.kind === "workspace").length;
+  const patchCount = entries.filter((entry) => entry.eventType === "screen.patched").length;
+  const resourceCount = entries.filter((entry) => entry.kind === "artifact" || entry.kind === "capability").length;
+  const issueCount = entries.filter((entry) => entry.kind === "error").length;
+  const actionCount = entries.filter((entry) => entry.kind === "action").length;
+  const inputCount = entries.filter((entry) => entry.kind === "input").length;
+  const formCount = entries.filter((entry) => entry.kind === "form").length;
+
+  return {
+    requestId: latestEntry?.requestId ?? firstEntry?.requestId ?? fallbackRequestId,
+    source: latestEntry?.requestSource ?? firstEntry?.requestSource,
+    entryCount: entries.length,
+    workspaceCount,
+    patchCount,
+    resourceCount,
+    issueCount,
+    actionCount,
+    inputCount,
+    formCount,
+    firstTitle: firstEntry?.title,
+    latestTitle: latestEntry?.title,
+    latestScreenId: latestEntry?.screenId,
+    latestScreenMode: latestEntry?.screenMode,
+    modePath: uniqueScreenModes.length > 0 ? uniqueScreenModes.join(" -> ") : "None",
+    hasResultScreen: screenModes.includes("result"),
+    hasTaskScreen: screenModes.includes("task"),
+    hasProcessingScreen: screenModes.includes("processing"),
+    hasCapability: entries.some((entry) => entry.kind === "capability"),
+    hasArtifact: entries.some((entry) => entry.kind === "artifact"),
+    hasForm: entries.some((entry) => entry.kind === "form"),
+    hasError: entries.some((entry) => entry.kind === "error")
+  };
+}
+
+export function getRuntimeCurrentRequestEntries(runtime: Pick<RuntimeContextValue, "flow" | "history">) {
+  return getRuntimeRequestEntries(runtime.history, runtime.flow.requestId);
+}
+
+export function getRuntimeLastCompletedRequestEntries(runtime: Pick<RuntimeContextValue, "flow" | "history">) {
+  return getRuntimeRequestEntries(runtime.history, runtime.flow.lastCompletedRequestId);
+}
+
+export function resolveRuntimeRequestId(
+  runtime: Pick<RuntimeContextValue, "flow">,
+  target: RuntimeRequestTarget = "current"
+) {
+  if (target === "current") {
+    return runtime.flow.requestId;
+  }
+
+  if (target === "lastCompleted") {
+    return runtime.flow.lastCompletedRequestId;
+  }
+
+  return target;
+}
+
+export function getRuntimeRequestCatalog(
+  history: RuntimeHistoryEntry[]
+): RuntimeRequestGroup[] {
+  const groups = new Map<string, RuntimeHistoryEntry[]>();
+
+  for (const entry of history) {
+    if (!entry.requestId) {
+      continue;
+    }
+
+    const existing = groups.get(entry.requestId);
+
+    if (existing) {
+      existing.push(entry);
+      continue;
+    }
+
+    groups.set(entry.requestId, [entry]);
+  }
+
+  return [...groups.entries()]
+    .map(([requestId, entries]) => ({
+      requestId,
+      source: entries[entries.length - 1]?.requestSource ?? entries[0]?.requestSource,
+      entries,
+      summary: summarizeRuntimeRequestEntries(entries, requestId)
+    }))
+    .sort((left, right) =>
+      (right.entries[right.entries.length - 1]?.timestamp ?? "").localeCompare(
+        left.entries[left.entries.length - 1]?.timestamp ?? ""
+      )
+    );
+}
+
+export function getRuntimeCapabilityHistoryEntries(history: RuntimeHistoryEntry[]) {
+  return history.filter((entry) => entry.kind === "capability");
+}
+
+export function getRuntimeLastCapabilityResolutionEntry(history: RuntimeHistoryEntry[]) {
+  const capabilityEntries = getRuntimeCapabilityHistoryEntries(history);
+
+  for (let index = capabilityEntries.length - 1; index >= 0; index -= 1) {
+    if (capabilityEntries[index]?.eventType === "capability.resolved") {
+      return capabilityEntries[index];
+    }
+  }
+
+  return undefined;
+}
+
+export function getRuntimeRequestGroup(
+  history: RuntimeHistoryEntry[],
+  requestId?: string
+) {
+  if (!requestId) {
+    return undefined;
+  }
+
+  const entries = getRuntimeRequestEntries(history, requestId);
+
+  if (entries.length === 0) {
+    return undefined;
+  }
+
+  return {
+    requestId,
+    source: entries[entries.length - 1]?.requestSource ?? entries[0]?.requestSource,
+    entries,
+    summary: summarizeRuntimeRequestEntries(entries, requestId)
+  } satisfies RuntimeRequestGroup;
+}
+
+export function resolveRuntimeRequestChain(
+  runtime: Pick<RuntimeContextValue, "flow" | "history">,
+  target: RuntimeRequestTarget = "current"
+): RuntimeResolvedRequestChain {
+  const requestId = resolveRuntimeRequestId(runtime, target);
+  const group = getRuntimeRequestGroup(runtime.history, requestId);
+  const entries = group?.entries ?? [];
+
+  return {
+    target,
+    requestId,
+    source: group?.source,
+    entries,
+    resources: getRuntimeRequestResourceEntries(entries),
+    summary: group?.summary ?? summarizeRuntimeRequestEntries(entries, requestId)
   };
 }
 

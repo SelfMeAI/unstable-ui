@@ -10,6 +10,13 @@ const linkedArtifact = {
   uri: "https://github.com/SelfMeAI/unstable-ui",
   source: "remote",
   title: "unstable-ui on GitHub",
+  preview: {
+    summary: "Repository home for the React Native runtime-first framework.",
+    fields: [
+      { label: "Owner", value: "SelfMeAI" },
+      { label: "Surface", value: "GitHub repository" }
+    ]
+  },
   previewable: true,
   openable: true
 };
@@ -21,6 +28,13 @@ const reportArtifact = {
   source: "remote",
   title: "Unstable UI report surface",
   mimeType: "text/html",
+  preview: {
+    summary: "Hosted HTML surface generated from the project website.",
+    fields: [
+      { label: "Format", value: "HTML document" },
+      { label: "Intent", value: "Hosted preview surface" }
+    ]
+  },
   previewable: true,
   openable: true
 };
@@ -32,6 +46,70 @@ const pdfArtifact = {
   source: "remote",
   title: "Sample PDF artifact",
   mimeType: "application/pdf",
+  preview: {
+    summary: "PDF resource available through the default bridge path.",
+    fields: [
+      { label: "Pages", value: "Demo sample" },
+      { label: "Intent", value: "Open or download test" }
+    ]
+  },
+  previewable: true,
+  openable: true
+};
+
+const textArtifact = {
+  id: "text-1",
+  kind: "text",
+  uri: "https://selfme.ai/unstable-ui/notes.txt",
+  source: "remote",
+  title: "Runtime notes",
+  mimeType: "text/plain",
+  preview: {
+    text: "Bridge preview content can arrive inside the artifact itself, so the renderer can show a useful sheet before opening anything.",
+    summary: "Plain-text artifact with inline preview content.",
+    fields: [
+      { label: "Lines", value: "1" },
+      { label: "Encoding", value: "UTF-8" }
+    ]
+  },
+  previewable: true,
+  openable: true
+};
+
+const jsonArtifact = {
+  id: "json-1",
+  kind: "json",
+  uri: "https://selfme.ai/unstable-ui/runtime.json",
+  source: "remote",
+  title: "Runtime manifest",
+  mimeType: "application/json",
+  preview: {
+    text: '{\n  "surface": "runtime-playground",\n  "version": "0.1.0-alpha.3",\n  "requestAware": true\n}',
+    summary: "Structured JSON payload for renderer-side inspection.",
+    fields: [
+      { label: "Schema", value: "runtime-manifest" },
+      { label: "Keys", value: "surface, version, requestAware" }
+    ]
+  },
+  previewable: true,
+  openable: true
+};
+
+const imageArtifact = {
+  id: "image-1",
+  kind: "image",
+  uri: "https://selfme.ai/logo.png",
+  source: "remote",
+  title: "Brand image",
+  mimeType: "image/png",
+  preview: {
+    summary: "Image artifact with a thumbnail reference for richer default previews.",
+    thumbnailUri: "https://selfme.ai/logo.png",
+    fields: [
+      { label: "Format", value: "PNG" },
+      { label: "Use", value: "Preview surface test" }
+    ]
+  },
   previewable: true,
   openable: true
 };
@@ -119,6 +197,12 @@ function getDemoArtifact(artifactId) {
   switch (artifactId) {
     case pdfArtifact.id:
       return pdfArtifact;
+    case textArtifact.id:
+      return textArtifact;
+    case jsonArtifact.id:
+      return jsonArtifact;
+    case imageArtifact.id:
+      return imageArtifact;
     case reportArtifact.id:
       return reportArtifact;
     case linkedArtifact.id:
@@ -143,6 +227,7 @@ const workspaceScenarioActions = [
   { id: "show-flow-lab", label: "Flow lab" },
   { id: "show-verification", label: "Verification board" },
   { id: "show-playground", label: "Playground" },
+  { id: "show-request-inspector", label: "Request inspector" },
   { id: "show-direct", label: "Direct result" },
   { id: "show-plan", label: "Staged plan" },
   { id: "show-timeline", label: "Task timeline" },
@@ -159,6 +244,10 @@ const systemScenarioActions = [
   { id: "show-report", label: "HTML report" },
   { id: "show-pdf", label: "PDF artifact" },
   { id: "request-microphone", label: "Microphone bridge" },
+  { id: "request-camera", label: "Camera bridge" },
+  { id: "request-photo-library", label: "Photo library bridge" },
+  { id: "request-location", label: "Location bridge" },
+  { id: "request-file-picker", label: "File picker bridge" },
   { id: "request-open-url", label: "Open URL bridge" },
   { id: "request-share", label: "Share bridge" },
   { id: "simulate-error", label: "Harness error" }
@@ -168,6 +257,7 @@ const quickTestActions = [
   { id: "show-flow-lab", label: "Open flow lab" },
   { id: "show-verification", label: "Open verification" },
   { id: "show-playground", label: "Open playground" },
+  { id: "show-request-inspector", label: "Open inspector" },
   { id: "show-direct", label: "Test direct result" },
   { id: "show-plan", label: "Test staged plan" },
   { id: "show-timeline", label: "Test timeline" },
@@ -366,6 +456,10 @@ function createFlowLabScreen() {
         type: "actions",
         items: [
           { id: "request-microphone", label: "Test capability" },
+          { id: "request-camera", label: "Test camera" },
+          { id: "request-photo-library", label: "Test library" },
+          { id: "request-location", label: "Test location" },
+          { id: "request-file-picker", label: "Test file picker" },
           { id: "request-open-url", label: "Test open URL" },
           { id: "request-share", label: "Test share" },
           { id: "preview-asset", label: "Test artifact" },
@@ -399,6 +493,13 @@ function createRuntimePlaygroundScreen() {
         source: "runtime.flow"
       },
       {
+        id: "playground-request-index-summary",
+        type: "details",
+        title: "Request index",
+        description: "All indexed request chains grouped by requestId.",
+        source: "runtime.requestIndexSummary"
+      },
+      {
         id: "playground-current-request-details",
         type: "details",
         title: "Current request summary",
@@ -420,10 +521,56 @@ function createRuntimePlaygroundScreen() {
         source: "runtime.interaction"
       },
       {
+        id: "playground-bridge-section",
+        type: "section",
+        title: "Bridge runtime state",
+        description: "Inspect the renderer-facing artifact inventory and pending capability queue.",
+        blocks: [
+          {
+            id: "playground-bridge-details",
+            type: "details",
+            title: "Bridge summary",
+            description: "Resolved directly from runtime bridge state.",
+            source: "runtime.bridge"
+          },
+          {
+            id: "playground-artifact-log",
+            type: "log",
+            title: "Artifact inventory",
+            source: "runtime.artifacts",
+            maxItems: 8,
+            emptyLabel: "No artifacts are registered in the runtime yet."
+          },
+          {
+            id: "playground-capability-log",
+            type: "log",
+            title: "Pending capabilities",
+            source: "runtime.capabilityRequests",
+            maxItems: 8,
+            emptyLabel: "No capability request is waiting right now."
+          },
+          {
+            id: "playground-last-capability-resolution",
+            type: "details",
+            title: "Last capability resolution",
+            source: "runtime.lastCapabilityResolution"
+          },
+          {
+            id: "playground-capability-history",
+            type: "log",
+            title: "Capability history",
+            source: "runtime.capabilityHistory",
+            maxItems: 8,
+            emptyLabel: "No capability activity recorded yet."
+          }
+        ]
+      },
+      {
         id: "playground-actions",
         type: "actions",
         items: [
           { id: "show-flow-lab", label: "Open flow lab" },
+          { id: "show-request-inspector", label: "Inspect request" },
           { id: "show-verification", label: "Open verification" },
           { id: "show-log", label: "Open event log" },
           { id: "show-workspace", label: "Open workspace" },
@@ -436,6 +583,14 @@ function createRuntimePlaygroundScreen() {
         title: "Session history",
         description: "Rendered directly from runtime.history inside the dynamic screen.",
         blocks: [
+          {
+            id: "playground-request-index-log",
+            type: "log",
+            title: "Request index log",
+            source: "runtime.requestIndex",
+            maxItems: 10,
+            emptyLabel: "No indexed request chains recorded yet."
+          },
           {
             id: "playground-history-log",
             type: "log",
@@ -453,12 +608,26 @@ function createRuntimePlaygroundScreen() {
         description: "Shows only the history entries attached to the active runtime.flow.requestId.",
         blocks: [
           {
+            id: "playground-current-request-resources",
+            type: "details",
+            title: "Current request resources",
+            source: "runtime.currentRequestResources"
+          },
+          {
             id: "playground-current-request-log",
             type: "log",
             title: "Current request history",
             source: "runtime.currentRequestHistory",
             maxItems: 8,
             emptyLabel: "No active request chain is attached right now."
+          },
+          {
+            id: "playground-current-request-resource-log",
+            type: "log",
+            title: "Current request resource history",
+            source: "runtime.currentRequestResourceHistory",
+            maxItems: 6,
+            emptyLabel: "No resource activity is attached to the active request."
           }
         ]
       },
@@ -485,12 +654,26 @@ function createRuntimePlaygroundScreen() {
         description: "Shows the latest fully completed request chain even after the runtime has returned to waiting.",
         blocks: [
           {
+            id: "playground-last-completed-request-resources",
+            type: "details",
+            title: "Last completed request resources",
+            source: "runtime.lastCompletedRequestResources"
+          },
+          {
             id: "playground-last-completed-request-log",
             type: "log",
             title: "Last completed request history",
             source: "runtime.lastCompletedRequestHistory",
             maxItems: 8,
             emptyLabel: "No completed request chain has been recorded yet."
+          },
+          {
+            id: "playground-last-completed-request-resource-log",
+            type: "log",
+            title: "Last completed request resource history",
+            source: "runtime.lastCompletedRequestResourceHistory",
+            maxItems: 6,
+            emptyLabel: "No resource activity is attached to the last completed request."
           }
         ]
       },
@@ -502,7 +685,135 @@ function createRuntimePlaygroundScreen() {
         blocks: [
           { id: "playground-resource-link", type: "resource", resource: linkedArtifact },
           { id: "playground-resource-report", type: "resource", resource: reportArtifact },
-          { id: "playground-resource-pdf", type: "resource", resource: pdfArtifact }
+          { id: "playground-resource-pdf", type: "resource", resource: pdfArtifact },
+          { id: "playground-resource-text", type: "resource", resource: textArtifact },
+          { id: "playground-resource-json", type: "resource", resource: jsonArtifact },
+          { id: "playground-resource-image", type: "resource", resource: imageArtifact }
+        ]
+      }
+    ]
+  });
+}
+
+function getRequestInspectorSubtitle(requestTarget) {
+  if (requestTarget === "current") {
+    return "Drill into the active request chain derived by the runtime.";
+  }
+
+  if (requestTarget === "lastCompleted") {
+    return "Drill into the most recent completed request chain.";
+  }
+
+  return `Drill into requestId ${requestTarget}.`;
+}
+
+function createRequestInspectorScreen(requestTarget = "current") {
+  const defaultRequestId =
+    requestTarget === "current" || requestTarget === "lastCompleted" ? "" : requestTarget;
+
+  return createStableScreen({
+    id: `remote-request-inspector-${requestTarget}`,
+    title: "Request inspector",
+    subtitle: getRequestInspectorSubtitle(requestTarget),
+    blocks: [
+      {
+        id: "request-inspector-intro",
+        type: "text",
+        value:
+          "Use this screen to inspect one request chain at a time. Choose current or last completed, or enter a specific requestId from the request index."
+      },
+      {
+        id: "request-inspector-summary",
+        type: "details",
+        title: "Request summary",
+        source: "runtime.request",
+        requestTarget
+      },
+      {
+        id: "request-inspector-verdict",
+        type: "details",
+        title: "Request verdict",
+        source: "runtime.requestVerdict",
+        requestTarget
+      },
+      {
+        id: "request-inspector-actions",
+        type: "actions",
+        items: [
+          { id: "inspect-current-request", label: "Inspect current" },
+          { id: "inspect-last-completed-request", label: "Inspect last completed" },
+          { id: "show-playground", label: "Open playground" },
+          { id: "back-home", label: "Back home" }
+        ]
+      },
+      {
+        id: "request-inspector-form",
+        type: "form",
+        title: "Inspect a specific requestId",
+        description: "Paste a requestId from the request index to open the exact chain.",
+        submitLabel: "Open request",
+        fields: [
+          {
+            id: "requestId",
+            kind: "text",
+            label: "Request ID",
+            placeholder: "voice-... / input-... / action-... / form-...",
+            defaultValue: defaultRequestId,
+            required: true
+          }
+        ]
+      },
+      {
+        id: "request-inspector-analysis",
+        type: "section",
+        title: "Analysis",
+        blocks: [
+          {
+            id: "request-inspector-assertions",
+            type: "details",
+            title: "Assertions",
+            source: "runtime.requestAssertions",
+            requestTarget
+          },
+          {
+            id: "request-inspector-matrix",
+            type: "details",
+            title: "Profile matrix",
+            source: "runtime.requestMatrix",
+            requestTarget
+          },
+          {
+            id: "request-inspector-resources",
+            type: "details",
+            title: "Resource summary",
+            source: "runtime.requestResources",
+            requestTarget
+          }
+        ]
+      },
+      {
+        id: "request-inspector-history-section",
+        type: "section",
+        title: "Request history",
+        blocks: [
+          {
+            id: "request-inspector-history-log",
+            type: "log",
+            title: "History",
+            source: "runtime.requestHistory",
+            requestTarget,
+            maxItems: 12,
+            emptyLabel: "No request chain matched this target."
+          },
+          {
+            id: "request-inspector-resource-log",
+            type: "log",
+            title: "Resource history",
+            source: "runtime.requestResourceHistory",
+            requestTarget,
+            maxItems: 8,
+            emptyLabel: "No resource activity is attached to this request chain."
+          }
         ]
       }
     ]
@@ -529,6 +840,22 @@ function createVerificationBoardScreen() {
         source: "runtime.flow"
       },
       {
+        id: "verification-request-index-summary",
+        type: "details",
+        title: "Request index",
+        description: "Use this to inspect the full request catalog before drilling into one chain.",
+        source: "runtime.requestIndexSummary"
+      },
+      {
+        id: "verification-request-actions",
+        type: "actions",
+        items: [
+          { id: "inspect-current-request", label: "Inspect current" },
+          { id: "inspect-last-completed-request", label: "Inspect last completed" },
+          { id: "show-request-inspector", label: "Open inspector" }
+        ]
+      },
+      {
         id: "verification-current-request-verdict",
         type: "details",
         title: "Current request verdict",
@@ -552,6 +879,42 @@ function createVerificationBoardScreen() {
           { id: "verification-metric-patches", label: "Patch events", value: "Only increments for screen.patched and should stay 0 for direct flows" },
           { id: "verification-metric-resources", label: "Resource events", value: "Captures artifacts and capability request or resolve activity" },
           { id: "verification-metric-issues", label: "Issues", value: "Any non-zero issue count means the chain needs review" }
+        ]
+      },
+      {
+        id: "verification-bridge-section",
+        type: "section",
+        title: "Bridge state",
+        description: "Inspect renderer-facing artifact and capability state without leaving the verification surface.",
+        blocks: [
+          {
+            id: "verification-bridge-details",
+            type: "details",
+            title: "Bridge summary",
+            source: "runtime.bridge"
+          },
+          {
+            id: "verification-bridge-artifacts",
+            type: "log",
+            title: "Artifact inventory",
+            source: "runtime.artifacts",
+            maxItems: 4,
+            emptyLabel: "No artifacts are registered in the runtime yet."
+          },
+          {
+            id: "verification-bridge-capabilities",
+            type: "log",
+            title: "Pending capabilities",
+            source: "runtime.capabilityRequests",
+            maxItems: 4,
+            emptyLabel: "No capability request is waiting right now."
+          },
+          {
+            id: "verification-bridge-last-capability",
+            type: "details",
+            title: "Last capability resolution",
+            source: "runtime.lastCapabilityResolution"
+          }
         ]
       },
       {
@@ -610,6 +973,20 @@ function createVerificationBoardScreen() {
         description: "Compare active and completed chains without opening the full session history.",
         blocks: [
           {
+            id: "verification-request-index-log",
+            type: "log",
+            title: "Request index log",
+            source: "runtime.requestIndex",
+            maxItems: 8,
+            emptyLabel: "No indexed request chains recorded yet."
+          },
+          {
+            id: "verification-current-request-resources",
+            type: "details",
+            title: "Current request resources",
+            source: "runtime.currentRequestResources"
+          },
+          {
             id: "verification-current-request-log",
             type: "log",
             title: "Current request history",
@@ -618,12 +995,34 @@ function createVerificationBoardScreen() {
             emptyLabel: "No active request chain."
           },
           {
+            id: "verification-current-request-resource-log",
+            type: "log",
+            title: "Current request resource history",
+            source: "runtime.currentRequestResourceHistory",
+            maxItems: 4,
+            emptyLabel: "No resource activity on the active request."
+          },
+          {
+            id: "verification-last-request-resources",
+            type: "details",
+            title: "Last completed request resources",
+            source: "runtime.lastCompletedRequestResources"
+          },
+          {
             id: "verification-last-request-log",
             type: "log",
             title: "Last completed request history",
             source: "runtime.lastCompletedRequestHistory",
             maxItems: 6,
             emptyLabel: "No completed request chain yet."
+          },
+          {
+            id: "verification-last-request-resource-log",
+            type: "log",
+            title: "Last completed request resource history",
+            source: "runtime.lastCompletedRequestResourceHistory",
+            maxItems: 4,
+            emptyLabel: "No resource activity on the last completed request."
           }
         ]
       },
@@ -1809,6 +2208,20 @@ function createCapabilityResultScreen(requestId, granted, payload) {
         type: "text",
         value: `Capability request ${requestId} resolved with granted=${String(granted)}.`
       },
+      {
+        id: "capability-result-details",
+        type: "details",
+        title: "Resolution summary",
+        items: [
+          { id: "capability-result-request", label: "Request ID", value: requestId },
+          { id: "capability-result-granted", label: "Granted", value: String(granted) },
+          {
+            id: "capability-result-bridge",
+            label: "Bridge",
+            value: typeof payload?.bridge === "string" ? payload.bridge : "None"
+          }
+        ]
+      },
       ...(payload
         ? [
             {
@@ -2031,6 +2444,21 @@ async function runRemoteAction(sessionId, actionId, requestId) {
     return;
   }
 
+  if (actionId === "show-request-inspector") {
+    broadcastResolvedScreen(sessionId, createRequestInspectorScreen("current"), requestId);
+    return;
+  }
+
+  if (actionId === "inspect-current-request") {
+    broadcastResolvedScreen(sessionId, createRequestInspectorScreen("current"), requestId);
+    return;
+  }
+
+  if (actionId === "inspect-last-completed-request") {
+    broadcastResolvedScreen(sessionId, createRequestInspectorScreen("lastCompleted"), requestId);
+    return;
+  }
+
   if (actionId === "show-brief") {
     broadcastResolvedScreen(sessionId, createTaskBriefScreen(), requestId);
     return;
@@ -2115,6 +2543,70 @@ async function runRemoteAction(sessionId, actionId, requestId) {
         id: requestId ?? "cap_microphone_remote_demo",
         capability: "microphone",
         reason: "The remote harness wants to demonstrate the capability bridge flow."
+      }
+    });
+    return;
+  }
+
+  if (actionId === "request-camera") {
+    broadcast(sessionId, {
+      type: "capability.requested",
+      request: {
+        id: requestId ?? "cap_camera_remote_demo",
+        capability: "camera",
+        reason: "The remote harness wants to validate the default camera bridge payload.",
+        payload: {
+          mode: "image",
+          facing: "rear"
+        }
+      }
+    });
+    return;
+  }
+
+  if (actionId === "request-photo-library") {
+    broadcast(sessionId, {
+      type: "capability.requested",
+      request: {
+        id: requestId ?? "cap_photo_library_remote_demo",
+        capability: "photo-library",
+        reason: "The remote harness wants to validate the default photo-library bridge payload.",
+        payload: {
+          accept: "image/*",
+          selectionMode: "single"
+        }
+      }
+    });
+    return;
+  }
+
+  if (actionId === "request-location") {
+    broadcast(sessionId, {
+      type: "capability.requested",
+      request: {
+        id: requestId ?? "cap_location_remote_demo",
+        capability: "location",
+        reason: "The remote harness wants to validate the default location bridge payload.",
+        payload: {
+          accuracy: "city",
+          purpose: "routing context"
+        }
+      }
+    });
+    return;
+  }
+
+  if (actionId === "request-file-picker") {
+    broadcast(sessionId, {
+      type: "capability.requested",
+      request: {
+        id: requestId ?? "cap_file_picker_remote_demo",
+        capability: "file-picker",
+        reason: "The remote harness wants to validate the default file-picker bridge payload.",
+        payload: {
+          accept: "text/plain,application/json",
+          selectionMode: "single"
+        }
       }
     });
     return;
@@ -2217,6 +2709,16 @@ async function handleClientEvent(sessionId, event) {
   }
 
   if (event.type === "form.submitted") {
+    if (event.formId === "request-inspector-form") {
+      const requestedTarget = event.values.requestId.trim();
+      broadcastResolvedScreen(
+        sessionId,
+        createRequestInspectorScreen(requestedTarget || "current"),
+        event.clientRequestId
+      );
+      return;
+    }
+
     broadcast(sessionId, { type: "status", phase: "thinking" });
     broadcast(sessionId, {
       type: "screen.updated",

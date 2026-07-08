@@ -201,6 +201,8 @@
             <li>screen.mode、screen.interaction、history、输入锁和固定导航栏已经进入主干。</li>
             <li>history 已经开始携带 request 级关联信息，能回看到底是哪一次输入、动作或表单触发了后续页面流。</li>
             <li>runtime 已经补出 currentRequest、lastCompletedRequest 及其对应 history 视图，不再只剩扁平 event log。</li>
+            <li>request catalog、request resource query 和 request summary 这层 runtime helper 已正式导出，不再只存在 renderer 私有实现里。</li>
+            <li>runtime 已开始把 artifact inventory、pending capability queue 和 bridge summary 暴露成内建可渲染 source。</li>
             <li>screen lifecycle、runtime flow controller 和 renderer transition hooks 已进入主干。</li>
             <li>demo 已经开始消费 transition hooks，过渡效果从框架事件驱动，而不是再靠页面内零散动画拼接。</li>
             <li>远端 harness 示例已经和本地 demo 对齐到明确的 request flow 页面阶段。</li>
