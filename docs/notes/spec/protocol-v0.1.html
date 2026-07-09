@@ -183,10 +183,24 @@
             <li><code class="inline">runtime.currentRequestHistory</code>：当前请求关联 history。</li>
             <li><code class="inline">runtime.lastCompletedRequestHistory</code>：最近完成请求关联 history。</li>
             <li>请求指标：historyEntryCount、workspaceEventCount、patchEventCount、resourceEventCount、issueCount。</li>
+            <li>导航调试源：<code class="inline">runtime.navigation</code>，可直接看到 history / request inspector overlay 当前是否打开、指向哪条 request。</li>
+            <li>持久化调试源：<code class="inline">runtime.persistence</code>，可直接看到本地恢复是否命中、最近一次保存时间、load/save 状态与错误。</li>
+            <li>传输调试源：<code class="inline">runtime.transport</code>，可直接看到 connect / reconnect / disconnect 次数、最近一次连接时间和连接错误。</li>
+            <li>恢复调试源：<code class="inline">runtime.recovery</code>，可直接看到当前是 fresh / restored / reset / reconnected 哪种恢复模式，以及最近一次 reset / reconnect 时间。</li>
+            <li>恢复断言源：<code class="inline">runtime.recoveryAssertions</code>，可直接得到 restore / reconnect / reset / persistence 这几类会话一致性检查。</li>
+            <li>恢复 verdict 源：<code class="inline">runtime.recoveryVerdict</code>，可直接给出会话恢复、传输和持久化信号是否一致的总判断。</li>
             <li>bridge 调试源：<code class="inline">runtime.bridge</code>、<code class="inline">runtime.artifacts</code>、<code class="inline">runtime.capabilityRequests</code>、<code class="inline">runtime.capabilityHistory</code>、<code class="inline">runtime.lastCapabilityResolution</code>。</li>
+            <li>bridge 集成源：<code class="inline">runtime.bridgeIntegration</code>，可直接查看宿主注册了哪些 host bridge 方法、哪些 artifact / capability handler 已经接入。</li>
+            <li>bridge 路由源：<code class="inline">runtime.bridgeRouting</code>，可直接看到代表性 artifact / capability 路径当前会走 artifact handler、host bridge、renderer default 还是 mock fallback。</li>
+            <li>bridge 错误源：<code class="inline">runtime.bridgeErrors</code>，可直接查看 renderer 侧 artifact / capability bridge 当前持有的错误信息。</li>
+            <li>bridge 断言源：<code class="inline">runtime.bridgeAssertions</code>，可直接检查 artifact inventory 是否有可操作路径、capability queue 与 resolution accounting 是否一致。</li>
+            <li>bridge verdict 源：<code class="inline">runtime.bridgeVerdict</code>，可直接给出 bridge-facing artifact 和 capability 信号是否一致的总判断。</li>
             <li>通用 request target 源：<code class="inline">runtime.request</code>、<code class="inline">runtime.requestResources</code>、<code class="inline">runtime.requestHistory</code>、<code class="inline">runtime.requestResourceHistory</code>、<code class="inline">runtime.requestAssertions</code>、<code class="inline">runtime.requestMatrix</code>、<code class="inline">runtime.requestVerdict</code>。</li>
+            <li>request 阶段摘要源：<code class="inline">runtime.requestStageSummary</code> 和 <code class="inline">runtime.requestStageLog</code>，可查看每个阶段的事件数、资源数、patch 数和 issue 数。</li>
+            <li>request 阶段回放时间线源：<code class="inline">runtime.requestTimeline</code>，可把某条 request chain 直接投影成 stage replay timeline。</li>
             <li>request 级资源查询源：<code class="inline">runtime.currentRequestResources</code>、<code class="inline">runtime.lastCompletedRequestResources</code>、<code class="inline">runtime.currentRequestResourceHistory</code>、<code class="inline">runtime.lastCompletedRequestResourceHistory</code>。</li>
             <li>request 索引源：<code class="inline">runtime.requestIndexSummary</code> 和 <code class="inline">runtime.requestIndex</code>。</li>
+            <li>request 动作源：<code class="inline">runtime.requestIndexActions</code>，可把 request catalog 直接变成可点击的钻取入口。</li>
           </ul>
           <div class="note">
             这意味着本地 harness 和远端 harness 只要老老实实发正常协议事件，就能自动获得同一套验证面，而不用额外实现第二套调试通道。
@@ -199,6 +213,26 @@
             通用 request 源可以额外带一个 <code class="inline">requestTarget</code>。保留值只有
             <code class="inline">current</code> 和 <code class="inline">lastCompleted</code>，
             其他非空字符串都按显式 <code class="inline">requestId</code> 处理。
+          </div>
+          <div class="note">
+            <code class="inline">actions</code> block 现在也可以走 runtime source。当前内建的是
+            <code class="inline">runtime.requestIndexActions</code>，用于把 request 索引直接映射成一组钻取动作。
+          </div>
+          <div class="note">
+            <code class="inline">timeline</code> block 现在也可以走 runtime source。当前内建的是
+            <code class="inline">runtime.requestTimeline</code>，用于把单条 request chain 直接渲染成 stage replay 时间线。
+          </div>
+          <div class="note">
+            <code class="inline">details</code> 和 <code class="inline">log</code> block 现在还能消费
+            <code class="inline">runtime.requestStageSummary</code> 与 <code class="inline">runtime.requestStageLog</code>，
+            用于查看 stage replay 背后的阶段指标。
+          </div>
+          <div class="note">
+            协议现在还额外预留了框架自带 overlay 的导航事件：
+            renderer 打开或关闭 history / request inspector 时会发
+            <code class="inline">navigation.changed</code>，
+            harness 若要同步状态或直接驱动这些 overlay，可回发
+            <code class="inline">navigation.updated</code>。
           </div>
         </section>
 

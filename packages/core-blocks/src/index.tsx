@@ -52,7 +52,7 @@ export function CoreBlock({ block, onAction, onFormSubmit, onArtifact, interacti
     case "actions":
       return (
         <View style={styles.actionGroup}>
-          {block.items.map((item) => (
+          {(block.items ?? []).map((item) => (
             <Pressable
               key={item.id}
               disabled={interaction?.actionsDisabled}
@@ -509,14 +509,14 @@ function TimelineCard({ block }: { block: TimelineBlock }) {
       {block.title ? <Text style={styles.cardTitle}>{block.title}</Text> : null}
       {block.description ? <Text style={styles.cardBody}>{block.description}</Text> : null}
       <View style={styles.timelineStack}>
-        {block.items.map((item, index) => {
+        {(block.items ?? []).map((item, index) => {
           const tone = getTimelineTone(item);
 
           return (
             <View key={item.id} style={styles.timelineRow}>
               <View style={styles.timelineRail}>
                 <View style={[styles.timelineDot, { backgroundColor: tone.dot }]} />
-                {index < block.items.length - 1 ? <View style={styles.timelineLine} /> : null}
+                {index < (block.items ?? []).length - 1 ? <View style={styles.timelineLine} /> : null}
               </View>
               <View style={[styles.timelineCard, { backgroundColor: tone.surface }]}>
                 <View style={styles.timelineHeader}>

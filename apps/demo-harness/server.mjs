@@ -486,11 +486,46 @@ function createRuntimePlaygroundScreen() {
         source: "runtime.session"
       },
       {
+        id: "playground-recovery-details",
+        type: "details",
+        title: "Recovery state",
+        description: "Resolved directly from runtime.recovery.",
+        source: "runtime.recovery"
+      },
+      {
+        id: "playground-session-actions",
+        type: "actions",
+        source: "runtime.sessionActions"
+      },
+      {
+        id: "playground-session-log",
+        type: "log",
+        title: "Session lifecycle",
+        source: "runtime.sessionLog",
+        maxItems: 10,
+        emptyLabel: "No session lifecycle entries recorded yet."
+      },
+      {
         id: "playground-flow-details",
         type: "details",
         title: "Request flow",
         description: "Resolved directly from runtime.flow.",
         source: "runtime.flow"
+      },
+      {
+        id: "playground-transport-details",
+        type: "details",
+        title: "Transport state",
+        description: "Resolved directly from runtime.transport.",
+        source: "runtime.transport"
+      },
+      {
+        id: "playground-transport-log",
+        type: "log",
+        title: "Transport lifecycle",
+        source: "runtime.transportLog",
+        maxItems: 8,
+        emptyLabel: "No transport lifecycle entries recorded yet."
       },
       {
         id: "playground-request-index-summary",
@@ -521,6 +556,33 @@ function createRuntimePlaygroundScreen() {
         source: "runtime.interaction"
       },
       {
+        id: "playground-navigation-details",
+        type: "details",
+        title: "Navigation overlays",
+        description: "Resolved directly from runtime.navigation.",
+        source: "runtime.navigation"
+      },
+      {
+        id: "playground-persistence-details",
+        type: "details",
+        title: "Persistence state",
+        description: "Resolved directly from runtime.persistence.",
+        source: "runtime.persistence"
+      },
+      {
+        id: "playground-persistence-actions",
+        type: "actions",
+        source: "runtime.persistenceActions"
+      },
+      {
+        id: "playground-persistence-log",
+        type: "log",
+        title: "Persistence lifecycle",
+        source: "runtime.persistenceLog",
+        maxItems: 8,
+        emptyLabel: "No persistence lifecycle entries recorded yet."
+      },
+      {
         id: "playground-bridge-section",
         type: "section",
         title: "Bridge runtime state",
@@ -532,6 +594,41 @@ function createRuntimePlaygroundScreen() {
             title: "Bridge summary",
             description: "Resolved directly from runtime bridge state.",
             source: "runtime.bridge"
+          },
+          {
+            id: "playground-bridge-integration",
+            type: "details",
+            title: "Bridge integration",
+            description: "Host-registered bridge methods and handler coverage currently active in the renderer.",
+            source: "runtime.bridgeIntegration"
+          },
+          {
+            id: "playground-bridge-routing",
+            type: "details",
+            title: "Bridge routing",
+            description: "Effective route selection for representative artifact and capability bridge paths.",
+            source: "runtime.bridgeRouting"
+          },
+          {
+            id: "playground-bridge-verdict",
+            type: "details",
+            title: "Bridge verdict",
+            description: "Top-level evaluation of artifact inventory and capability accounting.",
+            source: "runtime.bridgeVerdict"
+          },
+          {
+            id: "playground-bridge-assertions",
+            type: "details",
+            title: "Bridge assertions",
+            description: "Inspect the specific artifact and capability checks behind the verdict.",
+            source: "runtime.bridgeAssertions"
+          },
+          {
+            id: "playground-bridge-errors",
+            type: "details",
+            title: "Bridge errors",
+            description: "Current renderer-side bridge failures for artifact or capability handling.",
+            source: "runtime.bridgeErrors"
           },
           {
             id: "playground-artifact-log",
@@ -583,6 +680,12 @@ function createRuntimePlaygroundScreen() {
         title: "Session history",
         description: "Rendered directly from runtime.history inside the dynamic screen.",
         blocks: [
+          {
+            id: "playground-request-index-actions",
+            type: "actions",
+            source: "runtime.requestIndexActions",
+            maxItems: 8
+          },
           {
             id: "playground-request-index-log",
             type: "log",
@@ -695,131 +798,6 @@ function createRuntimePlaygroundScreen() {
   });
 }
 
-function getRequestInspectorSubtitle(requestTarget) {
-  if (requestTarget === "current") {
-    return "Drill into the active request chain derived by the runtime.";
-  }
-
-  if (requestTarget === "lastCompleted") {
-    return "Drill into the most recent completed request chain.";
-  }
-
-  return `Drill into requestId ${requestTarget}.`;
-}
-
-function createRequestInspectorScreen(requestTarget = "current") {
-  const defaultRequestId =
-    requestTarget === "current" || requestTarget === "lastCompleted" ? "" : requestTarget;
-
-  return createStableScreen({
-    id: `remote-request-inspector-${requestTarget}`,
-    title: "Request inspector",
-    subtitle: getRequestInspectorSubtitle(requestTarget),
-    blocks: [
-      {
-        id: "request-inspector-intro",
-        type: "text",
-        value:
-          "Use this screen to inspect one request chain at a time. Choose current or last completed, or enter a specific requestId from the request index."
-      },
-      {
-        id: "request-inspector-summary",
-        type: "details",
-        title: "Request summary",
-        source: "runtime.request",
-        requestTarget
-      },
-      {
-        id: "request-inspector-verdict",
-        type: "details",
-        title: "Request verdict",
-        source: "runtime.requestVerdict",
-        requestTarget
-      },
-      {
-        id: "request-inspector-actions",
-        type: "actions",
-        items: [
-          { id: "inspect-current-request", label: "Inspect current" },
-          { id: "inspect-last-completed-request", label: "Inspect last completed" },
-          { id: "show-playground", label: "Open playground" },
-          { id: "back-home", label: "Back home" }
-        ]
-      },
-      {
-        id: "request-inspector-form",
-        type: "form",
-        title: "Inspect a specific requestId",
-        description: "Paste a requestId from the request index to open the exact chain.",
-        submitLabel: "Open request",
-        fields: [
-          {
-            id: "requestId",
-            kind: "text",
-            label: "Request ID",
-            placeholder: "voice-... / input-... / action-... / form-...",
-            defaultValue: defaultRequestId,
-            required: true
-          }
-        ]
-      },
-      {
-        id: "request-inspector-analysis",
-        type: "section",
-        title: "Analysis",
-        blocks: [
-          {
-            id: "request-inspector-assertions",
-            type: "details",
-            title: "Assertions",
-            source: "runtime.requestAssertions",
-            requestTarget
-          },
-          {
-            id: "request-inspector-matrix",
-            type: "details",
-            title: "Profile matrix",
-            source: "runtime.requestMatrix",
-            requestTarget
-          },
-          {
-            id: "request-inspector-resources",
-            type: "details",
-            title: "Resource summary",
-            source: "runtime.requestResources",
-            requestTarget
-          }
-        ]
-      },
-      {
-        id: "request-inspector-history-section",
-        type: "section",
-        title: "Request history",
-        blocks: [
-          {
-            id: "request-inspector-history-log",
-            type: "log",
-            title: "History",
-            source: "runtime.requestHistory",
-            requestTarget,
-            maxItems: 12,
-            emptyLabel: "No request chain matched this target."
-          },
-          {
-            id: "request-inspector-resource-log",
-            type: "log",
-            title: "Resource history",
-            source: "runtime.requestResourceHistory",
-            requestTarget,
-            maxItems: 8,
-            emptyLabel: "No resource activity is attached to this request chain."
-          }
-        ]
-      }
-    ]
-  });
-}
-
 function createVerificationBoardScreen() {
   return createStableScreen({
     id: "remote-verification-board",
@@ -853,6 +831,73 @@ function createVerificationBoardScreen() {
           { id: "inspect-current-request", label: "Inspect current" },
           { id: "inspect-last-completed-request", label: "Inspect last completed" },
           { id: "show-request-inspector", label: "Open inspector" }
+        ]
+      },
+      {
+        id: "verification-recovery-section",
+        type: "section",
+        title: "Session recovery",
+        description: "Validate restore, reconnect, and reset health at the same level as request-chain checks.",
+        blocks: [
+          {
+            id: "verification-recovery-verdict",
+            type: "details",
+            title: "Recovery verdict",
+            description: "Top-level evaluation of recovery, persistence, and transport consistency.",
+            source: "runtime.recoveryVerdict"
+          },
+          {
+            id: "verification-recovery-assertions",
+            type: "details",
+            title: "Recovery assertions",
+            description: "Inspect the specific restore, reconnect, reset, and persistence checks behind the verdict.",
+            source: "runtime.recoveryAssertions"
+          },
+          {
+            id: "verification-recovery-raw",
+            type: "details",
+            title: "Recovery state",
+            description: "Raw recovery counters and timestamps from the runtime.",
+            source: "runtime.recovery"
+          },
+          {
+            id: "verification-transport-raw",
+            type: "details",
+            title: "Transport state",
+            description: "Raw transport counters and connection status from the runtime.",
+            source: "runtime.transport"
+          },
+          {
+            id: "verification-persistence-raw",
+            type: "details",
+            title: "Persistence state",
+            description: "Raw persistence counters, timestamps, and errors from the runtime.",
+            source: "runtime.persistence"
+          },
+          {
+            id: "verification-session-actions",
+            type: "actions",
+            source: "runtime.sessionActions"
+          },
+          {
+            id: "verification-persistence-actions",
+            type: "actions",
+            source: "runtime.persistenceActions"
+          }
+        ]
+      },
+      {
+        id: "verification-request-index-drilldown",
+        type: "section",
+        title: "Indexed request drill-down",
+        description: "Open a specific request chain directly from the runtime-generated request catalog.",
+        blocks: [
+          {
+            id: "verification-request-index-actions",
+            type: "actions",
+            source: "runtime.requestIndexActions",
+            maxItems: 8
+          }
         ]
       },
       {
@@ -892,6 +937,41 @@ function createVerificationBoardScreen() {
             type: "details",
             title: "Bridge summary",
             source: "runtime.bridge"
+          },
+          {
+            id: "verification-bridge-integration",
+            type: "details",
+            title: "Bridge integration",
+            description: "Host-registered bridge methods and handler coverage currently active in the renderer.",
+            source: "runtime.bridgeIntegration"
+          },
+          {
+            id: "verification-bridge-routing",
+            type: "details",
+            title: "Bridge routing",
+            description: "Effective route selection for representative artifact and capability bridge paths.",
+            source: "runtime.bridgeRouting"
+          },
+          {
+            id: "verification-bridge-verdict",
+            type: "details",
+            title: "Bridge verdict",
+            description: "Top-level evaluation of artifact inventory and capability accounting.",
+            source: "runtime.bridgeVerdict"
+          },
+          {
+            id: "verification-bridge-assertions",
+            type: "details",
+            title: "Bridge assertions",
+            description: "Inspect the specific artifact and capability checks behind the verdict.",
+            source: "runtime.bridgeAssertions"
+          },
+          {
+            id: "verification-bridge-errors",
+            type: "details",
+            title: "Bridge errors",
+            description: "Current renderer-side bridge failures for artifact or capability handling.",
+            source: "runtime.bridgeErrors"
           },
           {
             id: "verification-bridge-artifacts",
@@ -2412,7 +2492,7 @@ async function runRemoteDirectResultScenario(sessionId, requestId) {
   broadcastResolvedScreen(sessionId, createDirectResultScreen(), requestId);
 }
 
-async function runRemoteAction(sessionId, actionId, requestId) {
+async function runRemoteAction(sessionId, actionId, requestId, payload) {
   const session = ensureSession(sessionId);
 
   if (!session) {
@@ -2445,17 +2525,62 @@ async function runRemoteAction(sessionId, actionId, requestId) {
   }
 
   if (actionId === "show-request-inspector") {
-    broadcastResolvedScreen(sessionId, createRequestInspectorScreen("current"), requestId);
+    const requestTarget =
+      typeof payload?.requestTarget === "string"
+        ? payload.requestTarget
+        : typeof payload?.requestId === "string"
+          ? payload.requestId
+          : "current";
+    broadcast(sessionId, {
+      type: "navigation.updated",
+      navigation: {
+        surface: "request-inspector",
+        visibility: "open",
+        requestTarget
+      }
+    });
     return;
   }
 
   if (actionId === "inspect-current-request") {
-    broadcastResolvedScreen(sessionId, createRequestInspectorScreen("current"), requestId);
+    broadcast(sessionId, {
+      type: "navigation.updated",
+      navigation: {
+        surface: "request-inspector",
+        visibility: "open",
+        requestTarget: "current"
+      }
+    });
     return;
   }
 
   if (actionId === "inspect-last-completed-request") {
-    broadcastResolvedScreen(sessionId, createRequestInspectorScreen("lastCompleted"), requestId);
+    broadcast(sessionId, {
+      type: "navigation.updated",
+      navigation: {
+        surface: "request-inspector",
+        visibility: "open",
+        requestTarget: "lastCompleted"
+      }
+    });
+    return;
+  }
+
+  if (actionId.startsWith("inspect-request-")) {
+    const requestTarget =
+      typeof payload?.requestTarget === "string"
+        ? payload.requestTarget
+        : typeof payload?.requestId === "string"
+          ? payload.requestId
+          : "current";
+    broadcast(sessionId, {
+      type: "navigation.updated",
+      navigation: {
+        surface: "request-inspector",
+        visibility: "open",
+        requestTarget
+      }
+    });
     return;
   }
 
@@ -2699,6 +2824,14 @@ async function handleClientEvent(sessionId, event) {
     return;
   }
 
+  if (event.type === "navigation.changed") {
+    broadcast(sessionId, {
+      type: "navigation.updated",
+      navigation: event.navigation
+    });
+    return;
+  }
+
   if (event.type === "capability.resolved") {
     broadcastResolvedScreen(
       sessionId,
@@ -2709,16 +2842,6 @@ async function handleClientEvent(sessionId, event) {
   }
 
   if (event.type === "form.submitted") {
-    if (event.formId === "request-inspector-form") {
-      const requestedTarget = event.values.requestId.trim();
-      broadcastResolvedScreen(
-        sessionId,
-        createRequestInspectorScreen(requestedTarget || "current"),
-        event.clientRequestId
-      );
-      return;
-    }
-
     broadcast(sessionId, { type: "status", phase: "thinking" });
     broadcast(sessionId, {
       type: "screen.updated",
@@ -2745,7 +2868,7 @@ async function handleClientEvent(sessionId, event) {
     broadcast(sessionId, { type: "status", phase: "running" });
   }
 
-  await runRemoteAction(sessionId, event.actionId, event.clientRequestId);
+  await runRemoteAction(sessionId, event.actionId, event.clientRequestId, event.payload);
 }
 
 const server = createServer(async (req, res) => {

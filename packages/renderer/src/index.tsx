@@ -1,4 +1,4 @@
-import { type ReactNode, useEffect, useRef, useState } from "react";
+import { forwardRef, type ReactNode, useEffect, useImperativeHandle, useRef, useState } from "react";
 import {
   Animated,
   Easing,
@@ -18,6 +18,7 @@ import {
 import { CoreBlock } from "@selfme/unstable-ui-core-blocks";
 import type { HarnessAdapter } from "@selfme/unstable-ui-harness-sdk";
 import type {
+  ActionItem,
   ArtifactRef,
   Block,
   CapabilityRequest,
@@ -26,6 +27,7 @@ import type {
   DetailItem,
   LogBlock,
   LogItem,
+  NavigationChange,
   RequestTarget,
   ScreenFlowTransition
 } from "@selfme/unstable-ui-protocol";
@@ -36,6 +38,8 @@ import {
   getRuntimeLastCapabilityResolutionEntry,
   getRuntimeRequestCatalog,
   getRuntimeRequestResourceEntries,
+  getRuntimeRequestTimelineStageSummaries,
+  getRuntimeRequestTimelineItems,
   resolveRuntimeRequestChain,
   summarizeRuntimeRequestEntries,
   useAgentRuntime,
@@ -434,6 +438,8 @@ export interface ArtifactHandlerContext {
   downloadWithSystem(): Promise<void>;
 }
 
+type MaybePromise<T> = T | Promise<T>;
+
 export interface ArtifactHandler {
   preview?: (artifact: ArtifactRef) => ArtifactPreviewDescriptor | undefined | Promise<ArtifactPreviewDescriptor | undefined>;
   open?: (artifact: ArtifactRef, context: ArtifactHandlerContext) => void | Promise<void>;
@@ -442,6 +448,32 @@ export interface ArtifactHandler {
 }
 
 export type ArtifactHandlers = Partial<Record<ArtifactRef["kind"], ArtifactHandler>>;
+
+export type ArtifactPreviewRegistry = Partial<
+  Record<
+    ArtifactRef["kind"],
+    ArtifactPreviewDescriptor | ((artifact: ArtifactRef) => MaybePromise<ArtifactPreviewDescriptor | undefined>)
+  >
+>;
+
+export function createArtifactPreviewHandlers(previews: ArtifactPreviewRegistry): ArtifactHandlers {
+  const handlers: ArtifactHandlers = {};
+
+  for (const [kind, preview] of Object.entries(previews) as Array<[ArtifactRef["kind"], ArtifactPreviewRegistry[ArtifactRef["kind"]]]>) {
+    if (!preview) {
+      continue;
+    }
+
+    handlers[kind] = {
+      preview:
+        typeof preview === "function"
+          ? (artifact) => preview(artifact)
+          : () => preview
+    };
+  }
+
+  return handlers;
+}
 
 export interface CapabilityPromptField {
   label: string;
@@ -473,6 +505,107 @@ export interface CapabilityHandler {
 
 export type CapabilityHandlers = Partial<Record<CapabilityRequest["capability"], CapabilityHandler>>;
 
+export interface CapabilityHandlerPresetContext {
+  defaultPayload: Record<string, unknown>;
+}
+
+export interface CapabilityHandlerPreset {
+  describe?:
+    | CapabilityPromptDescriptor
+    | ((request: CapabilityRequest) => MaybePromise<CapabilityPromptDescriptor | undefined>);
+  resolvePayload?:
+    | Record<string, unknown>
+    | ((
+        request: CapabilityRequest,
+        granted: boolean,
+        context: CapabilityHandlerPresetContext
+      ) => MaybePromise<Record<string, unknown> | undefined>);
+  mergeDefaultPayload?: boolean;
+}
+
+export type CapabilityHandlerPresets = Partial<Record<CapabilityRequest["capability"], CapabilityHandlerPreset>>;
+
+export function createCapabilityHandlers(presets: CapabilityHandlerPresets): CapabilityHandlers {
+  const handlers: CapabilityHandlers = {};
+
+  for (const [capability, preset] of Object.entries(presets) as Array<
+    [CapabilityRequest["capability"], CapabilityHandlerPresets[CapabilityRequest["capability"]]]
+  >) {
+    if (!preset) {
+      continue;
+    }
+
+    const describe = preset.describe;
+    const resolvePayload = preset.resolvePayload;
+    let describeHandler: CapabilityHandler["describe"];
+    let resolveHandler: CapabilityHandler["resolve"];
+
+    if (describe !== undefined) {
+      if (typeof describe === "function") {
+        const describeFactory = describe;
+        describeHandler = (request) => describeFactory(request);
+      } else {
+        const describeDescriptor = describe;
+        describeHandler = () => describeDescriptor;
+      }
+    }
+
+    if (resolvePayload !== undefined) {
+      if (typeof resolvePayload === "function") {
+        const resolvePayloadFactory = resolvePayload;
+        resolveHandler = async (request, granted) => {
+          const defaultPayload = granted
+            ? createDefaultMockCapabilityPayload(request)
+            : createDefaultDeniedCapabilityPayload(request);
+          const nextPayload = await resolvePayloadFactory(request, granted, {
+            defaultPayload
+          });
+
+          if (nextPayload === undefined) {
+            return {
+              payload: defaultPayload
+            };
+          }
+
+          return {
+            payload:
+              preset.mergeDefaultPayload === false
+                ? nextPayload
+                : {
+                    ...defaultPayload,
+                    ...nextPayload
+                  }
+          };
+        };
+      } else {
+        const staticPayload = resolvePayload;
+        resolveHandler = async (request, granted) => {
+          const defaultPayload = granted
+            ? createDefaultMockCapabilityPayload(request)
+            : createDefaultDeniedCapabilityPayload(request);
+
+          return {
+            payload:
+              preset.mergeDefaultPayload === false
+                ? staticPayload
+                : {
+                    ...defaultPayload,
+                    ...staticPayload
+                  }
+          };
+        };
+      }
+    }
+
+    handlers[capability] = {
+      describe: describeHandler,
+      resolve: resolveHandler
+    };
+  }
+
+  return handlers;
+}
+
 export interface HostBridgeOpenUrlContext {
   reason: "artifact-open" | "artifact-download" | "capability-open-url";
   artifact?: ArtifactRef;
@@ -502,6 +635,135 @@ export interface HostBridge {
   ) => CapabilityResolution | undefined | Promise<CapabilityResolution | undefined>;
 }
 
+export interface HostBridgePreset {
+  openUrl?: HostBridge["openUrl"];
+  share?: HostBridge["share"];
+  resolveCapabilityPayload?:
+    | Record<string, unknown>
+    | ((
+        request: CapabilityRequest,
+        granted: boolean,
+        context: HostBridgeCapabilityContext
+      ) => MaybePromise<Record<string, unknown> | undefined>);
+  mergeDefaultPayload?: boolean;
+}
+
+export function createHostBridge(preset: HostBridgePreset): HostBridge {
+  const bridge: HostBridge = {};
+
+  if (preset.openUrl) {
+    bridge.openUrl = preset.openUrl;
+  }
+
+  if (preset.share) {
+    bridge.share = preset.share;
+  }
+
+  if (preset.resolveCapabilityPayload !== undefined) {
+    const resolveCapabilityPayload = preset.resolveCapabilityPayload;
+
+    bridge.resolveCapability = async (request, granted, context) => {
+      const defaultPayload =
+        context.defaultPayload ??
+        (granted ? createDefaultMockCapabilityPayload(request) : createDefaultDeniedCapabilityPayload(request));
+      const nextPayload =
+        typeof resolveCapabilityPayload === "function"
+          ? await resolveCapabilityPayload(request, granted, {
+              defaultPayload
+            })
+          : resolveCapabilityPayload;
+
+      if (nextPayload === undefined) {
+        return {
+          payload: defaultPayload
+        };
+      }
+
+      return {
+        payload:
+          preset.mergeDefaultPayload === false
+            ? nextPayload
+            : {
+                ...defaultPayload,
+                ...nextPayload
+              }
+      };
+    };
+  }
+
+  return bridge;
+}
+
+export interface HostIntegration {
+  artifactHandlers?: ArtifactHandlers;
+  capabilityHandlers?: CapabilityHandlers;
+  hostBridge?: HostBridge;
+}
+
+export interface HostIntegrationPreset {
+  artifactPreviews?: ArtifactPreviewRegistry;
+  capabilityPresets?: CapabilityHandlerPresets;
+  hostBridgePreset?: HostBridgePreset;
+  artifactHandlers?: ArtifactHandlers;
+  capabilityHandlers?: CapabilityHandlers;
+  hostBridge?: HostBridge;
+}
+
+function mergeArtifactHandlers(
+  generated?: ArtifactHandlers,
+  explicit?: ArtifactHandlers
+): ArtifactHandlers | undefined {
+  if (!generated && !explicit) {
+    return undefined;
+  }
+
+  return {
+    ...(generated ?? {}),
+    ...(explicit ?? {})
+  };
+}
+
+function mergeCapabilityHandlers(
+  generated?: CapabilityHandlers,
+  explicit?: CapabilityHandlers
+): CapabilityHandlers | undefined {
+  if (!generated && !explicit) {
+    return undefined;
+  }
+
+  return {
+    ...(generated ?? {}),
+    ...(explicit ?? {})
+  };
+}
+
+function mergeHostBridge(generated?: HostBridge, explicit?: HostBridge): HostBridge | undefined {
+  if (!generated && !explicit) {
+    return undefined;
+  }
+
+  return {
+    ...(generated ?? {}),
+    ...(explicit ?? {})
+  };
+}
+
+export function createHostIntegration(preset: HostIntegrationPreset): HostIntegration {
+  const generatedArtifactHandlers = preset.artifactPreviews
+    ? createArtifactPreviewHandlers(preset.artifactPreviews)
+    : undefined;
+  const generatedCapabilityHandlers = preset.capabilityPresets
+    ? createCapabilityHandlers(preset.capabilityPresets)
+    : undefined;
+  const generatedHostBridge = preset.hostBridgePreset ? createHostBridge(preset.hostBridgePreset) : undefined;
+
+  return {
+    artifactHandlers: mergeArtifactHandlers(generatedArtifactHandlers, preset.artifactHandlers),
+    capabilityHandlers: mergeCapabilityHandlers(generatedCapabilityHandlers, preset.capabilityHandlers),
+    hostBridge: mergeHostBridge(generatedHostBridge, preset.hostBridge)
+  };
+}
+
 export interface AgentRuntimeViewProps {
   harness: HarnessAdapter;
   voiceShell?: VoiceShellOptions;
@@ -510,7 +772,18 @@ export interface AgentRuntimeViewProps {
   hostBridge?: HostBridge;
   renderVoiceShell?: (props: VoiceShellRenderProps) => ReactNode;
   transitionHooks?: RendererTransitionHooks;
+  navigationHooks?: RendererNavigationHooks;
   runtimeOptions?: AgentRuntimeOptions;
+}
+
+export interface AgentRuntimeViewHandle {
+  openHistory(): void;
+  closeHistory(): void;
+  openRequestInspector(target?: RequestTarget): void;
+  closeRequestInspector(): void;
+  clearPersistence(): Promise<void>;
+  reconnect(): Promise<void>;
+  resetSession(options?: { clearPersistence?: boolean }): Promise<void>;
 }
 
 export interface RendererInteractionLockSnapshot {
@@ -560,6 +833,31 @@ export interface RendererTransitionHooks {
   onInteractionLockChange?: (event: RendererInteractionLockChangeEvent) => void;
 }
 
+export interface RendererRequestInspectorSnapshot {
+  visible: boolean;
+  target: RequestTarget;
+  resolvedRequestId?: string;
+  source?: RuntimeContextValue["history"][number]["requestSource"];
+  entryCount: number;
+  latestTitle?: string;
+  hasResultScreen: boolean;
+}
+
+export interface RendererRequestInspectorChangeEvent {
+  previous: RendererRequestInspectorSnapshot;
+  current: RendererRequestInspectorSnapshot;
+}
+
+export interface RendererHistoryVisibilityChangeEvent {
+  previous: boolean;
+  current: boolean;
+}
+
+export interface RendererNavigationHooks {
+  onRequestInspectorChange?: (event: RendererRequestInspectorChangeEvent) => void;
+  onHistoryVisibilityChange?: (event: RendererHistoryVisibilityChangeEvent) => void;
+}
+
 interface ArtifactPreviewState {
   artifact: ArtifactRef;
   preview: ArtifactPreviewDescriptor;
@@ -575,6 +873,7 @@ interface HistoryModalProps {
   historyEnabled: boolean;
   visible: boolean;
   onClose(): void;
+  onInspectRequest(target: RequestTarget): void;
 }
 
 interface HistoryRequestGroup {
@@ -591,6 +890,18 @@ type RequestChainSummary = RuntimeRequestSummary;
 
 type RequestFlowProfile = "direct" | "staged" | "patched" | "approval" | "form" | "unknown";
 type RequestVerdict = "pass" | "needs-review" | "idle";
+type RecoveryVerdict = "pass" | "needs-review";
+type BridgeVerdict = "pass" | "needs-review";
+type RuntimeDerivedRequestSource =
+  | DetailsBlock["source"]
+  | LogBlock["source"]
+  | "runtime.requestTimeline"
+  | undefined;
+
+interface RequestInspectorState {
+  visible: boolean;
+  target: RequestTarget;
+}
 
 interface RenderSnapshot {
   signature: string;
@@ -603,6 +914,39 @@ interface RenderSnapshot {
   rootBlockCount: number;
   blockTypeCount: number;
 }
+
+interface RendererDiagnostics {
+  artifactBridgeError?: string;
+  capabilityBridgeError?: string;
+  hostBridgeOpenUrlEnabled: boolean;
+  hostBridgeShareEnabled: boolean;
+  hostBridgeResolveCapabilityEnabled: boolean;
+  artifactHandlerKinds: ArtifactRef["kind"][];
+  capabilityHandlerKinds: CapabilityRequest["capability"][];
+  artifactHandlerCoverage: Array<{
+    kind: ArtifactRef["kind"];
+    preview: boolean;
+    open: boolean;
+    share: boolean;
+    download: boolean;
+  }>;
+  capabilityHandlerCoverage: Array<{
+    capability: CapabilityRequest["capability"];
+    describe: boolean;
+    resolve: boolean;
+  }>;
+}
+
+const artifactKindCatalog: ArtifactRef["kind"][] = ["text", "image", "audio", "video", "pdf", "html", "file", "link", "json"];
+const capabilityCatalog: CapabilityRequest["capability"][] = [
+  "microphone",
+  "camera",
+  "photo-library",
+  "location",
+  "file-picker",
+  "share",
+  "open-url"
+];
 
 type HistoryFilter = "all" | "input" | "workspace" | "resource" | "issue" | "patched";
 type ScreenArchetype = "plan" | "timeline" | "brief" | "form" | "workspace" | "resource";
@@ -745,6 +1089,16 @@ function createDefaultMockCapabilityPayload(request: CapabilityRequest) {
   }
 }
 
+function createDefaultDeniedCapabilityPayload(request: CapabilityRequest) {
+  return {
+    bridge: "renderer-default-mock",
+    capability: request.capability,
+    granted: false,
+    mock: true,
+    resolvedAt: new Date().toISOString()
+  };
+}
+
 function getArtifactKindDescription(kind: ArtifactRef["kind"]) {
   switch (kind) {
     case "link":
@@ -883,8 +1237,455 @@ function createCapabilityRequestLogItem(request: CapabilityRequest): LogItem {
   };
 }
 
+function createRequestIndexActionItems(runtime: RuntimeContextValue, maxItems?: number): ActionItem[] {
+  return getRuntimeRequestCatalog(runtime.history)
+    .slice(0, maxItems ?? 8)
+    .map((group) => {
+      const summary = group.summary;
+      const profile = inferRequestFlowProfile(summary);
+      const labelBase = summary.latestTitle ?? group.requestId;
+
+      return {
+        id: `inspect-request-${group.requestId}`,
+        label: `${labelBase} · ${getRequestFlowProfileLabel(profile)}`,
+        payload: {
+          requestTarget: group.requestId
+        }
+      } satisfies ActionItem;
+    });
+}
+
+function createRuntimePersistenceActionItems(runtime: RuntimeContextValue): ActionItem[] {
+  if (!runtime.persistence.enabled) {
+    return [];
+  }
+
+  return [
+    {
+      id: "clear-runtime-persistence",
+      label: runtime.persistence.canClear ? "Clear persistence" : "Persistence clear unavailable",
+      payload: {
+        enabled: runtime.persistence.enabled,
+        canClear: runtime.persistence.canClear
+      }
+    }
+  ];
+}
+
+function createRuntimeSessionActionItems(runtime: RuntimeContextValue): ActionItem[] {
+  const items: ActionItem[] = [
+    {
+      id: "reconnect-runtime",
+      label: "Reconnect runtime"
+    },
+    {
+      id: "reset-runtime-session",
+      label: "Reset session"
+    }
+  ];
+
+  if (runtime.persistence.enabled && runtime.persistence.canClear) {
+    items.push({
+      id: "reset-runtime-session-and-clear-persistence",
+      label: "Reset + clear persistence"
+    });
+  }
+
+  return items;
+}
+
+function createRuntimeTransportLogItems(runtime: RuntimeContextValue, maxItems?: number) {
+  return runtime.eventLog
+    .filter((entry) =>
+      entry.direction === "runtime" &&
+      (entry.type === "runtime.connect" ||
+        entry.type === "runtime.connected" ||
+        entry.type === "runtime.disconnected" ||
+        entry.type === "runtime.reset" ||
+        entry.type === "runtime.error")
+    )
+    .slice()
+    .reverse()
+    .slice(0, maxItems ?? 20)
+    .map(createRuntimeLogItem);
+}
+
+function createRuntimePersistenceLogItems(runtime: RuntimeContextValue, maxItems?: number): LogItem[] {
+  const { persistence } = runtime;
+  const items: Array<LogItem & { sortKey: string }> = [];
+
+  if (persistence.loadState === "loading") {
+    items.push({
+      id: "persistence-loading",
+      title: "Loading snapshot",
+      body: "The runtime is loading a persisted snapshot.",
+      meta: "persistence · loading",
+      tone: "warning",
+      sortKey: "9999-12-31T23:59:59.999Z"
+    });
+  }
+
+  if (persistence.saveState === "saving") {
+    items.push({
+      id: "persistence-saving",
+      title: "Saving snapshot",
+      body: "The runtime is saving the current snapshot.",
+      meta: "persistence · saving",
+      tone: "warning",
+      sortKey: "9999-12-31T23:59:59.998Z"
+    });
+  }
+
+  if (persistence.clearState === "clearing") {
+    items.push({
+      id: "persistence-clearing",
+      title: "Clearing snapshot",
+      body: "The runtime is clearing the persisted snapshot.",
+      meta: "persistence · clearing",
+      tone: "warning",
+      sortKey: "9999-12-31T23:59:59.997Z"
+    });
+  }
+
+  if (persistence.lastHydratedAt) {
+    items.push({
+      id: "persistence-hydrated",
+      title: persistence.hydratedFromSnapshot ? "Snapshot restored" : "Snapshot load completed",
+      body: persistence.hydratedFromSnapshot
+        ? "The runtime restored state from a persisted snapshot."
+        : "The runtime finished loading persistence without restoring a snapshot.",
+      meta: `persistence · ${formatHistoryTimestamp(persistence.lastHydratedAt)}`,
+      tone: persistence.hydratedFromSnapshot ? "success" : "default",
+      sortKey: persistence.lastHydratedAt
+    });
+  } else if (persistence.enabled && persistence.loadState === "ready" && persistence.loadCount > 0) {
+    items.push({
+      id: "persistence-no-snapshot",
+      title: "No snapshot restored",
+      body: "The runtime completed persistence loading without a saved snapshot.",
+      meta: "persistence · ready",
+      tone: "default",
+      sortKey: "0000-00-00T00:00:00.000Z"
+    });
+  }
+
+  if (persistence.lastSavedAt) {
+    items.push({
+      id: "persistence-saved",
+      title: "Snapshot saved",
+      body: `Saved snapshot ${persistence.saveCount} time(s).`,
+      meta: `persistence · ${formatHistoryTimestamp(persistence.lastSavedAt)}`,
+      tone: "success",
+      sortKey: persistence.lastSavedAt
+    });
+  }
+
+  if (persistence.lastClearedAt) {
+    items.push({
+      id: "persistence-cleared",
+      title: "Snapshot cleared",
+      body: `Cleared snapshot ${persistence.clearCount} time(s).`,
+      meta: `persistence · ${formatHistoryTimestamp(persistence.lastClearedAt)}`,
+      tone: "success",
+      sortKey: persistence.lastClearedAt
+    });
+  }
+
+  if (persistence.loadError) {
+    items.push({
+      id: "persistence-load-error",
+      title: "Snapshot load error",
+      body: persistence.loadError,
+      meta: "persistence · load error",
+      tone: "danger",
+      sortKey: "9999-12-31T23:59:59.996Z"
+    });
+  }
+
+  if (persistence.saveError) {
+    items.push({
+      id: "persistence-save-error",
+      title: "Snapshot save error",
+      body: persistence.saveError,
+      meta: "persistence · save error",
+      tone: "danger",
+      sortKey: "9999-12-31T23:59:59.995Z"
+    });
+  }
+
+  if (persistence.clearError) {
+    items.push({
+      id: "persistence-clear-error",
+      title: "Snapshot clear error",
+      body: persistence.clearError,
+      meta: "persistence · clear error",
+      tone: "danger",
+      sortKey: "9999-12-31T23:59:59.994Z"
+    });
+  }
+
+  return items
+    .sort((left, right) => right.sortKey.localeCompare(left.sortKey))
+    .slice(0, maxItems ?? 20)
+    .map(({ sortKey, ...item }) => item);
+}
+
+function createRuntimeSessionLogItems(runtime: RuntimeContextValue, maxItems?: number) {
+  return runtime.eventLog
+    .filter((entry) =>
+      entry.type === "runtime.hydrated" ||
+      entry.type === "runtime.connect" ||
+      entry.type === "runtime.connected" ||
+      entry.type === "runtime.disconnected" ||
+      entry.type === "runtime.reset" ||
+      entry.type === "runtime.error" ||
+      entry.type === "session.started" ||
+      entry.type === "session.completed"
+    )
+    .slice()
+    .reverse()
+    .slice(0, maxItems ?? 20)
+    .map(createRuntimeLogItem);
+}
+
+function getRequestStageStatusTone(status: "pending" | "active" | "complete" | "error"): LogItem["tone"] {
+  switch (status) {
+    case "error":
+      return "danger";
+    case "active":
+      return "warning";
+    case "complete":
+      return "success";
+    case "pending":
+    default:
+      return "default";
+  }
+}
+
+function createRequestStageLogItems(
+  runtime: RuntimeContextValue,
+  source: RuntimeDerivedRequestSource,
+  requestTarget?: RequestTarget,
+  maxItems?: number
+) {
+  const chain = getResolvedRequestChain(runtime, source, requestTarget);
+
+  return getRuntimeRequestTimelineStageSummaries(chain.entries, chain.requestId, maxItems).map((stage, index) => ({
+    id: `${stage.key}-${index}`,
+    title: stage.title,
+    body:
+      stage.description ??
+      `${stage.eventCount} event(s), ${stage.resourceCount} resource event(s), ${stage.patchCount} patch event(s)`,
+    meta: [
+      stage.meta,
+      `${stage.resourceCount} resource${stage.resourceCount === 1 ? "" : "s"}`,
+      `${stage.patchCount} patch${stage.patchCount === 1 ? "" : "es"}`,
+      `${stage.issueCount} issue${stage.issueCount === 1 ? "" : "s"}`
+    ]
+      .filter(Boolean)
+      .join(" · "),
+    tone: getRequestStageStatusTone(stage.status)
+  }));
+}
+
+function normalizeRequestTarget(target?: RequestTarget): RequestTarget {
+  return typeof target === "string" && target.trim() ? target.trim() : "current";
+}
+
+function resolveNavigationChangeFromAction(action: ActionItem): NavigationChange | undefined {
+  if (action.id === "show-history" || action.id === "open-history") {
+    return {
+      surface: "history",
+      visibility: "open"
+    };
+  }
+
+  if (action.id === "close-history") {
+    return {
+      surface: "history",
+      visibility: "closed"
+    };
+  }
+
+  if (action.id === "inspect-current-request") {
+    return {
+      surface: "request-inspector",
+      visibility: "open",
+      requestTarget: "current"
+    };
+  }
+
+  if (action.id === "inspect-last-completed-request") {
+    return {
+      surface: "request-inspector",
+      visibility: "open",
+      requestTarget: "lastCompleted"
+    };
+  }
+
+  if (action.id === "close-request-inspector") {
+    return {
+      surface: "request-inspector",
+      visibility: "closed"
+    };
+  }
+
+  if (action.id === "show-request-inspector" || action.id.startsWith("inspect-request-")) {
+    return {
+      surface: "request-inspector",
+      visibility: "open",
+      requestTarget:
+        typeof action.payload?.requestTarget === "string"
+          ? action.payload.requestTarget
+          : typeof action.payload?.requestId === "string"
+            ? action.payload.requestId
+            : "current"
+    };
+  }
+
+  return undefined;
+}
+
+function buildRequestInspectorBlocks(requestTarget: RequestTarget): Block[] {
+  return [
+    {
+      id: "request-inspector-summary",
+      type: "details",
+      title: "Request summary",
+      source: "runtime.request",
+      requestTarget
+    },
+    {
+      id: "request-inspector-verdict",
+      type: "details",
+      title: "Request verdict",
+      source: "runtime.requestVerdict",
+      requestTarget
+    },
+    {
+      id: "request-inspector-actions",
+      type: "actions",
+      items: [
+        { id: "inspect-current-request", label: "Inspect current" },
+        { id: "inspect-last-completed-request", label: "Inspect last completed" },
+        { id: "close-request-inspector", label: "Close" }
+      ]
+    },
+    {
+      id: "request-inspector-index",
+      type: "section",
+      title: "Request catalog",
+      description: "Open any indexed request chain directly from the runtime-derived request catalog.",
+      blocks: [
+        {
+          id: "request-inspector-request-index-actions",
+          type: "actions",
+          source: "runtime.requestIndexActions",
+          maxItems: 8
+        }
+      ]
+    },
+    {
+      id: "request-inspector-analysis",
+      type: "section",
+      title: "Analysis",
+      blocks: [
+        {
+          id: "request-inspector-timeline",
+          type: "timeline",
+          title: "Stage replay",
+          description: "Runtime-derived stage timeline for the selected request chain.",
+          source: "runtime.requestTimeline",
+          requestTarget,
+          maxItems: 12
+        },
+        {
+          id: "request-inspector-stage-summary",
+          type: "details",
+          title: "Stage summary",
+          source: "runtime.requestStageSummary",
+          requestTarget
+        },
+        {
+          id: "request-inspector-stage-log",
+          type: "log",
+          title: "Stage metrics",
+          source: "runtime.requestStageLog",
+          requestTarget,
+          maxItems: 8,
+          emptyLabel: "No stage replay is available for this request chain."
+        },
+        {
+          id: "request-inspector-assertions",
+          type: "details",
+          title: "Assertions",
+          source: "runtime.requestAssertions",
+          requestTarget
+        },
+        {
+          id: "request-inspector-matrix",
+          type: "details",
+          title: "Profile matrix",
+          source: "runtime.requestMatrix",
+          requestTarget
+        },
+        {
+          id: "request-inspector-resources",
+          type: "details",
+          title: "Resource summary",
+          source: "runtime.requestResources",
+          requestTarget
+        }
+      ]
+    },
+    {
+      id: "request-inspector-history",
+      type: "section",
+      title: "Request history",
+      blocks: [
+        {
+          id: "request-inspector-history-log",
+          type: "log",
+          title: "History",
+          source: "runtime.requestHistory",
+          requestTarget,
+          maxItems: 12,
+          emptyLabel: "No request chain matched this target."
+        },
+        {
+          id: "request-inspector-resource-log",
+          type: "log",
+          title: "Resource history",
+          source: "runtime.requestResourceHistory",
+          requestTarget,
+          maxItems: 8,
+          emptyLabel: "No resource activity is attached to this request chain."
+        }
+      ]
+    }
+  ];
+}
+
+function createRequestInspectorSnapshot(
+  runtime: RuntimeContextValue,
+  state: RequestInspectorState
+): RendererRequestInspectorSnapshot {
+  const normalizedTarget = normalizeRequestTarget(state.target);
+  const chain = resolveRuntimeRequestChain(runtime, normalizedTarget);
+
+  return {
+    visible: state.visible,
+    target: normalizedTarget,
+    resolvedRequestId: chain.requestId,
+    source: chain.summary.source,
+    entryCount: chain.summary.entryCount,
+    latestTitle: chain.summary.latestTitle,
+    hasResultScreen: chain.summary.hasResultScreen
+  };
+}
+
 function resolveRequestTarget(
-  source: DetailsBlock["source"] | LogBlock["source"] | undefined,
+  source: RuntimeDerivedRequestSource,
   requestTarget?: RequestTarget
 ): RuntimeRequestTarget {
   if (
@@ -916,7 +1717,7 @@ function resolveRequestTarget(
 
 function getResolvedRequestChain(
   runtime: RuntimeContextValue,
-  source: DetailsBlock["source"] | LogBlock["source"] | undefined,
+  source: RuntimeDerivedRequestSource,
   requestTarget?: RequestTarget
 ) {
   return resolveRuntimeRequestChain(runtime, resolveRequestTarget(source, requestTarget));
@@ -924,7 +1725,7 @@ function getResolvedRequestChain(
 
 function resolveRequestEvaluationMode(
   runtime: RuntimeContextValue,
-  source: DetailsBlock["source"] | LogBlock["source"] | undefined,
+  source: RuntimeDerivedRequestSource,
   requestTarget: RequestTarget | undefined,
   summary: RequestChainSummary
 ): "current" | "completed" {
@@ -1058,6 +1859,157 @@ function createRequestIndexSummaryItems(runtime: RuntimeContextValue): DetailIte
       id: "request-index-latest",
       label: "Latest chain",
       value: latestSummary?.latestTitle ?? "None"
+    }
+  ];
+}
+
+function createRuntimeNavigationDetailItems(runtime: RuntimeContextValue, blockId: string): DetailItem[] {
+  const historyVisible = runtime.navigation.historyVisible;
+  const inspectorState = runtime.navigation.requestInspector;
+  const inspectorChain = resolveRuntimeRequestChain(runtime, inspectorState.target);
+
+  return [
+    {
+      id: `${blockId}-history-visible`,
+      label: "History overlay",
+      value: historyVisible ? "open" : "closed",
+      tone: historyVisible ? "warning" : "default"
+    },
+    {
+      id: `${blockId}-history-lock`,
+      label: "History access",
+      value: runtime.interaction.history,
+      tone: getInteractionTone(runtime.interaction.history)
+    },
+    {
+      id: `${blockId}-inspector-visible`,
+      label: "Inspector overlay",
+      value: inspectorState.visible ? "open" : "closed",
+      tone: inspectorState.visible ? "warning" : "default"
+    },
+    {
+      id: `${blockId}-inspector-target`,
+      label: "Inspector target",
+      value: inspectorState.target
+    },
+    {
+      id: `${blockId}-inspector-request-id`,
+      label: "Resolved request",
+      value: inspectorChain.requestId ?? "None"
+    },
+    {
+      id: `${blockId}-inspector-entries`,
+      label: "Resolved entries",
+      value: String(inspectorChain.summary.entryCount)
+    }
+  ];
+}
+
+function createRuntimePersistenceDetailItems(runtime: RuntimeContextValue, blockId: string): DetailItem[] {
+  const persistence = runtime.persistence;
+
+  return [
+    {
+      id: `${blockId}-enabled`,
+      label: "Persistence",
+      value: persistence.enabled ? "enabled" : "disabled",
+      tone: persistence.enabled ? "success" : "default"
+    },
+    {
+      id: `${blockId}-can-clear`,
+      label: "Clear support",
+      value: persistence.canClear ? "yes" : "no",
+      tone: persistence.canClear ? "success" : "default"
+    },
+    {
+      id: `${blockId}-load-state`,
+      label: "Load state",
+      value: persistence.loadState,
+      tone:
+        persistence.loadState === "ready"
+          ? "success"
+          : persistence.loadState === "error"
+            ? "danger"
+            : persistence.loadState === "loading"
+              ? "warning"
+              : "default"
+    },
+    {
+      id: `${blockId}-save-state`,
+      label: "Save state",
+      value: persistence.saveState,
+      tone:
+        persistence.saveState === "ready"
+          ? "success"
+          : persistence.saveState === "error"
+            ? "danger"
+            : persistence.saveState === "saving"
+              ? "warning"
+              : "default"
+    },
+    {
+      id: `${blockId}-clear-state`,
+      label: "Clear state",
+      value: persistence.clearState,
+      tone:
+        persistence.clearState === "ready"
+          ? "success"
+          : persistence.clearState === "error"
+            ? "danger"
+            : persistence.clearState === "clearing"
+              ? "warning"
+              : "default"
+    },
+    {
+      id: `${blockId}-hydrated`,
+      label: "Hydrated snapshot",
+      value: persistence.hydratedFromSnapshot ? "yes" : "no",
+      tone: persistence.hydratedFromSnapshot ? "success" : "default"
+    },
+    {
+      id: `${blockId}-load-count`,
+      label: "Load count",
+      value: String(persistence.loadCount)
+    },
+    {
+      id: `${blockId}-save-count`,
+      label: "Save count",
+      value: String(persistence.saveCount)
+    },
+    {
+      id: `${blockId}-clear-count`,
+      label: "Clear count",
+      value: String(persistence.clearCount)
+    },
+    {
+      id: `${blockId}-last-hydrated-at`,
+      label: "Last hydrated",
+      value: persistence.lastHydratedAt ? formatHistoryTimestamp(persistence.lastHydratedAt) : "None"
+    },
+    {
+      id: `${blockId}-last-saved-at`,
+      label: "Last saved",
+      value: persistence.lastSavedAt ? formatHistoryTimestamp(persistence.lastSavedAt) : "None"
+    },
+    {
+      id: `${blockId}-last-cleared-at`,
+      label: "Last cleared",
+      value: persistence.lastClearedAt ? formatHistoryTimestamp(persistence.lastClearedAt) : "None"
+    },
+    {
+      id: `${blockId}-load-error`,
+      label: "Load error",
+      value: persistence.loadError ?? "None"
+    },
+    {
+      id: `${blockId}-save-error`,
+      label: "Save error",
+      value: persistence.saveError ?? "None"
+    },
+    {
+      id: `${blockId}-clear-error`,
+      label: "Clear error",
+      value: persistence.clearError ?? "None"
     }
   ];
 }
@@ -1583,11 +2535,569 @@ function createRequestVerdictItems(
   ];
 }
 
+function hasRuntimePersistenceError(runtime: RuntimeContextValue) {
+  const persistence = runtime.persistence;
+
+  return Boolean(
+    persistence.loadError ||
+      persistence.saveError ||
+      persistence.clearError ||
+      persistence.loadState === "error" ||
+      persistence.saveState === "error" ||
+      persistence.clearState === "error"
+  );
+}
+
+function hasRuntimePersistencePending(runtime: RuntimeContextValue) {
+  const persistence = runtime.persistence;
+
+  return (
+    persistence.loadState === "loading" ||
+    persistence.saveState === "saving" ||
+    persistence.clearState === "clearing"
+  );
+}
+
+function inferRecoveryVerdict(runtime: RuntimeContextValue): RecoveryVerdict {
+  const transportState = runtime.transport.connectState;
+  const reconnectCountsMatch = runtime.recovery.reconnectCount === runtime.transport.reconnectCount;
+  const restoredModeMismatch = runtime.recovery.mode === "restored" && !runtime.persistence.hydratedFromSnapshot;
+  const reconnectedModeMismatch =
+    runtime.recovery.mode === "reconnected" &&
+    (runtime.recovery.reconnectCount < 1 || runtime.transport.reconnectCount < 1);
+  const resetModeMismatch = runtime.recovery.mode === "reset" && runtime.recovery.resetCount < 1;
+
+  if (
+    transportState === "error" ||
+    transportState === "disconnected" ||
+    hasRuntimePersistenceError(runtime) ||
+    !reconnectCountsMatch ||
+    restoredModeMismatch ||
+    reconnectedModeMismatch ||
+    resetModeMismatch
+  ) {
+    return "needs-review";
+  }
+
+  if (transportState === "connecting" || hasRuntimePersistencePending(runtime)) {
+    return "needs-review";
+  }
+
+  return "pass";
+}
+
+function getRecoveryVerdictLabel(verdict: RecoveryVerdict) {
+  return verdict === "pass" ? "Pass" : "Needs review";
+}
+
+function createRecoveryAssertionItems(runtime: RuntimeContextValue): DetailItem[] {
+  const { persistence, recovery, transport } = runtime;
+  const reconnectCountsMatch = recovery.reconnectCount === transport.reconnectCount;
+  const restoreAligned = recovery.mode !== "restored" || persistence.hydratedFromSnapshot;
+  const reconnectReady =
+    recovery.mode !== "reconnected" ||
+    (recovery.reconnectCount > 0 && transport.reconnectCount > 0 && transport.connectState === "connected");
+  const resetReady = recovery.mode !== "reset" || recovery.resetCount > 0;
+
+  const modeValue =
+    recovery.mode === "restored"
+      ? restoreAligned
+        ? "Restored mode matches snapshot hydration."
+        : "Restored mode requires a hydrated snapshot."
+      : recovery.mode === "reconnected"
+        ? reconnectReady
+          ? "Reconnected mode matches runtime and transport counters."
+          : "Reconnected mode is missing a confirmed reconnect cycle."
+        : recovery.mode === "reset"
+          ? resetReady
+            ? "Reset mode is backed by a recorded reset event."
+            : "Reset mode is missing a recorded reset event."
+          : "Fresh mode is active with no recovery override in effect.";
+  const modeTone: DetailItem["tone"] =
+    recovery.mode === "restored"
+      ? restoreAligned
+        ? "success"
+        : "danger"
+      : recovery.mode === "reconnected"
+        ? reconnectReady
+          ? "success"
+          : "danger"
+        : recovery.mode === "reset"
+          ? resetReady
+            ? "success"
+            : "danger"
+          : "success";
+
+  const transportValue =
+    transport.connectState === "connected"
+      ? transport.lastConnectError
+        ? "Runtime is connected, but a previous connect error is still recorded."
+        : "Runtime is connected."
+      : transport.connectState === "connecting"
+        ? "Runtime is reconnecting or establishing transport."
+        : transport.connectState === "disconnected"
+          ? "Runtime transport is disconnected."
+          : "Runtime transport reported a connect error.";
+  const transportTone: DetailItem["tone"] =
+    transport.connectState === "connected"
+      ? transport.lastConnectError
+        ? "warning"
+        : "success"
+      : transport.connectState === "connecting"
+        ? "warning"
+        : "danger";
+
+  const persistenceValue = !persistence.enabled
+    ? "Persistence is disabled for this runtime."
+    : hasRuntimePersistenceError(runtime)
+      ? "Persistence reported a load, save, or clear error."
+      : hasRuntimePersistencePending(runtime)
+        ? "Persistence is actively loading, saving, or clearing."
+        : persistence.hydratedFromSnapshot
+          ? "Persistence is healthy and a snapshot was restored."
+          : "Persistence is healthy and no snapshot restore was needed.";
+  const persistenceTone: DetailItem["tone"] = !persistence.enabled
+    ? "default"
+    : hasRuntimePersistenceError(runtime)
+      ? "danger"
+      : hasRuntimePersistencePending(runtime)
+        ? "warning"
+        : "success";
+
+  const reconnectValue = reconnectCountsMatch
+    ? `Recovery and transport both report ${recovery.reconnectCount} reconnect cycle(s).`
+    : `Recovery reports ${recovery.reconnectCount}, transport reports ${transport.reconnectCount}.`;
+
+  const resetValue =
+    recovery.resetCount === 0
+      ? "No session reset has been exercised yet."
+      : recovery.clearedPersistenceOnLastReset
+        ? "The latest reset cleared persisted state before reconnecting."
+        : "The latest reset preserved persisted state.";
+
+  return [
+    {
+      id: "recovery-assert-mode",
+      label: "Mode alignment",
+      value: modeValue,
+      tone: modeTone
+    },
+    {
+      id: "recovery-assert-transport",
+      label: "Transport continuity",
+      value: transportValue,
+      tone: transportTone
+    },
+    {
+      id: "recovery-assert-persistence",
+      label: "Persistence integrity",
+      value: persistenceValue,
+      tone: persistenceTone
+    },
+    {
+      id: "recovery-assert-reconnect",
+      label: "Reconnect accounting",
+      value: reconnectValue,
+      tone: reconnectCountsMatch ? "success" : "warning"
+    },
+    {
+      id: "recovery-assert-reset",
+      label: "Reset path",
+      value: resetValue,
+      tone:
+        recovery.resetCount === 0
+          ? "default"
+          : recovery.clearedPersistenceOnLastReset
+            ? "success"
+            : "warning"
+    },
+    {
+      id: "recovery-assert-hydration",
+      label: "Snapshot hydration",
+      value: persistence.hydratedFromSnapshot
+        ? "A persisted snapshot has been restored into the current runtime."
+        : "No persisted snapshot has been restored into the current runtime.",
+      tone: persistence.hydratedFromSnapshot ? "success" : "default"
+    }
+  ];
+}
+
+function createRecoveryVerdictItems(runtime: RuntimeContextValue): DetailItem[] {
+  const verdict = inferRecoveryVerdict(runtime);
+
+  return [
+    {
+      id: "recovery-verdict",
+      label: "Verdict",
+      value: getRecoveryVerdictLabel(verdict),
+      tone: verdict === "pass" ? "success" : "danger"
+    },
+    {
+      id: "recovery-verdict-mode",
+      label: "Mode",
+      value: runtime.recovery.mode,
+      tone:
+        runtime.recovery.mode === "restored"
+          ? "success"
+          : runtime.recovery.mode === "fresh"
+            ? "default"
+            : "warning"
+    },
+    {
+      id: "recovery-verdict-reason",
+      label: "Reason",
+      value:
+        verdict === "pass"
+          ? "Recovery, persistence, and transport signals are internally consistent."
+          : "One or more recovery, persistence, or transport signals need review.",
+      tone: verdict === "pass" ? "success" : "warning"
+    }
+  ];
+}
+
+function getBridgeCapabilityCounts(runtime: RuntimeContextValue) {
+  const capabilityEntries = getRuntimeCapabilityHistoryEntries(runtime.history);
+  const requestedCount = capabilityEntries.filter((entry) => entry.eventType === "capability.requested").length;
+  const resolvedCount = capabilityEntries.filter((entry) => entry.eventType === "capability.resolved").length;
+
+  return {
+    requestedCount,
+    resolvedCount,
+    pendingCount: runtime.capabilityRequests.length
+  };
+}
+
+function inferBridgeVerdict(runtime: RuntimeContextValue): BridgeVerdict {
+  const previewableArtifacts = runtime.artifacts.filter((artifact) => artifact.previewable !== false).length;
+  const openableArtifacts = runtime.artifacts.filter((artifact) => artifact.openable !== false).length;
+  const shareableArtifacts = runtime.artifacts.filter(canShareArtifact).length;
+  const downloadableArtifacts = runtime.artifacts.filter(canDownloadArtifact).length;
+  const { requestedCount, resolvedCount, pendingCount } = getBridgeCapabilityCounts(runtime);
+  const capabilityAccountingMismatch =
+    resolvedCount > requestedCount || requestedCount > resolvedCount + pendingCount;
+  const pendingCapabilityUnlocked =
+    pendingCount > 0 &&
+    runtime.interaction.input !== "locked" &&
+    runtime.interaction.actions !== "locked" &&
+    runtime.interaction.forms !== "locked";
+  const artifactInventoryBlocked =
+    runtime.artifacts.length > 0 &&
+    previewableArtifacts === 0 &&
+    openableArtifacts === 0 &&
+    shareableArtifacts === 0 &&
+    downloadableArtifacts === 0;
+
+  if (capabilityAccountingMismatch || pendingCapabilityUnlocked || artifactInventoryBlocked) {
+    return "needs-review";
+  }
+
+  return "pass";
+}
+
+function getBridgeVerdictLabel(verdict: BridgeVerdict) {
+  return verdict === "pass" ? "Pass" : "Needs review";
+}
+
+function createBridgeAssertionItems(runtime: RuntimeContextValue): DetailItem[] {
+  const previewableArtifacts = runtime.artifacts.filter((artifact) => artifact.previewable !== false);
+  const openableArtifacts = runtime.artifacts.filter((artifact) => artifact.openable !== false);
+  const shareableArtifacts = runtime.artifacts.filter(canShareArtifact);
+  const downloadableArtifacts = runtime.artifacts.filter(canDownloadArtifact);
+  const latestArtifact = runtime.artifacts[runtime.artifacts.length - 1];
+  const latestCapabilityResolution = getRuntimeLastCapabilityResolutionEntry(runtime.history);
+  const activeCapability = runtime.capabilityRequests[0];
+  const { requestedCount, resolvedCount, pendingCount } = getBridgeCapabilityCounts(runtime);
+  const capabilityAccountingMismatch =
+    resolvedCount > requestedCount || requestedCount > resolvedCount + pendingCount;
+  const pendingCapabilityLocked =
+    pendingCount === 0 ||
+    runtime.interaction.input === "locked" ||
+    runtime.interaction.actions === "locked" ||
+    runtime.interaction.forms === "locked";
+  const actionableArtifactCount =
+    previewableArtifacts.length + openableArtifacts.length + shareableArtifacts.length + downloadableArtifacts.length;
+
+  return [
+    {
+      id: "bridge-assert-artifacts",
+      label: "Artifact release",
+      value:
+        runtime.artifacts.length === 0
+          ? "No artifacts are registered in the runtime yet."
+          : actionableArtifactCount > 0
+            ? `${runtime.artifacts.length} artifact(s) are registered with ${actionableArtifactCount} actionable bridge path(s).`
+            : `${runtime.artifacts.length} artifact(s) are registered, but none are previewable, openable, shareable, or downloadable.`,
+      tone:
+        runtime.artifacts.length === 0
+          ? "default"
+          : actionableArtifactCount > 0
+            ? "success"
+            : "danger"
+    },
+    {
+      id: "bridge-assert-capability-lock",
+      label: "Capability lock",
+      value:
+        pendingCount === 0
+          ? "No capability request is waiting in the runtime."
+          : pendingCapabilityLocked
+            ? `${pendingCount} capability request(s) are pending and the runtime is holding interaction locks.`
+            : `${pendingCount} capability request(s) are pending, but the runtime is not holding an input, action, or form lock.`,
+      tone:
+        pendingCount === 0
+          ? "default"
+          : pendingCapabilityLocked
+            ? "success"
+            : "danger"
+    },
+    {
+      id: "bridge-assert-capability-accounting",
+      label: "Capability accounting",
+      value: capabilityAccountingMismatch
+        ? `Requested ${requestedCount}, resolved ${resolvedCount}, pending ${pendingCount}.`
+        : `Requested ${requestedCount}, resolved ${resolvedCount}, pending ${pendingCount} stay internally consistent.`,
+      tone: capabilityAccountingMismatch ? "danger" : "success"
+    },
+    {
+      id: "bridge-assert-active-capability",
+      label: "Active capability",
+      value: activeCapability ? getCapabilityDisplayName(activeCapability.capability) : "None",
+      tone: activeCapability ? "warning" : "default"
+    },
+    {
+      id: "bridge-assert-latest-artifact",
+      label: "Latest artifact",
+      value: latestArtifact?.title ?? latestArtifact?.id ?? "None",
+      tone: latestArtifact ? "success" : "default"
+    },
+    {
+      id: "bridge-assert-last-resolution",
+      label: "Last capability resolution",
+      value: latestCapabilityResolution?.title ?? "No capability resolution recorded yet.",
+      tone: latestCapabilityResolution ? "success" : "default"
+    }
+  ];
+}
+
+function createBridgeVerdictItems(runtime: RuntimeContextValue): DetailItem[] {
+  const verdict = inferBridgeVerdict(runtime);
+  const { requestedCount, resolvedCount, pendingCount } = getBridgeCapabilityCounts(runtime);
+  const actionableArtifacts =
+    runtime.artifacts.filter((artifact) => artifact.previewable !== false).length +
+    runtime.artifacts.filter((artifact) => artifact.openable !== false).length +
+    runtime.artifacts.filter(canShareArtifact).length +
+    runtime.artifacts.filter(canDownloadArtifact).length;
+
+  return [
+    {
+      id: "bridge-verdict",
+      label: "Verdict",
+      value: getBridgeVerdictLabel(verdict),
+      tone: verdict === "pass" ? "success" : "danger"
+    },
+    {
+      id: "bridge-verdict-summary",
+      label: "Reason",
+      value:
+        verdict === "pass"
+          ? "Artifact inventory and capability accounting are internally consistent."
+          : "One or more bridge-level artifact or capability checks need review.",
+      tone: verdict === "pass" ? "success" : "warning"
+    },
+    {
+      id: "bridge-verdict-balance",
+      label: "Bridge balance",
+      value: `${runtime.artifacts.length} artifact(s) · ${actionableArtifacts} actionable path(s) · ${requestedCount}/${resolvedCount}/${pendingCount} capability requested-resolved-pending`,
+      tone: verdict === "pass" ? "success" : "warning"
+    }
+  ];
+}
+
+function createBridgeIntegrationItems(diagnostics?: RendererDiagnostics): DetailItem[] {
+  const artifactKinds = diagnostics?.artifactHandlerKinds ?? [];
+  const capabilityKinds = diagnostics?.capabilityHandlerKinds ?? [];
+  const hostOpenUrl = diagnostics?.hostBridgeOpenUrlEnabled ?? false;
+  const hostShare = diagnostics?.hostBridgeShareEnabled ?? false;
+  const hostResolveCapability = diagnostics?.hostBridgeResolveCapabilityEnabled ?? false;
+  const hostMethodCount = [hostOpenUrl, hostShare, hostResolveCapability].filter(Boolean).length;
+
+  let integrationMode = "Default renderer bridge only";
+  let integrationTone: DetailItem["tone"] = "default";
+
+  if (hostMethodCount > 0 || artifactKinds.length > 0 || capabilityKinds.length > 0) {
+    integrationMode =
+      hostMethodCount === 3
+        ? "Host bridge + custom handlers"
+        : hostMethodCount > 0
+          ? "Mixed host bridge integration"
+          : "Custom handlers without host bridge";
+    integrationTone = "success";
+  }
+
+  return [
+    {
+      id: "bridge-integration-mode",
+      label: "Integration mode",
+      value: integrationMode,
+      tone: integrationTone
+    },
+    {
+      id: "bridge-integration-host-open-url",
+      label: "Host openUrl",
+      value: hostOpenUrl ? "enabled" : "renderer default",
+      tone: hostOpenUrl ? "success" : "default"
+    },
+    {
+      id: "bridge-integration-host-share",
+      label: "Host share",
+      value: hostShare ? "enabled" : "renderer default",
+      tone: hostShare ? "success" : "default"
+    },
+    {
+      id: "bridge-integration-host-capability",
+      label: "Host resolveCapability",
+      value: hostResolveCapability ? "enabled" : "renderer default or mock",
+      tone: hostResolveCapability ? "success" : "warning"
+    },
+    {
+      id: "bridge-integration-artifact-handlers",
+      label: "Artifact handlers",
+      value: artifactKinds.length > 0 ? artifactKinds.join(", ") : "None",
+      tone: artifactKinds.length > 0 ? "success" : "default"
+    },
+    {
+      id: "bridge-integration-capability-handlers",
+      label: "Capability handlers",
+      value: capabilityKinds.length > 0 ? capabilityKinds.join(", ") : "None",
+      tone: capabilityKinds.length > 0 ? "success" : "default"
+    },
+    {
+      id: "bridge-integration-mock-risk",
+      label: "Mock fallback risk",
+      value:
+        hostResolveCapability || capabilityKinds.length > 0
+          ? "Capability flows have an app-level integration path."
+          : "Unmapped capability flows may fall back to renderer default mock payloads.",
+      tone: hostResolveCapability || capabilityKinds.length > 0 ? "success" : "warning"
+    }
+  ];
+}
+
+function describeArtifactRoute(
+  kind: ArtifactRef["kind"],
+  mode: "preview" | "open" | "share" | "download",
+  diagnostics?: RendererDiagnostics
+) {
+  const coverage = diagnostics?.artifactHandlerCoverage.find((item) => item.kind === kind);
+
+  if (mode === "preview") {
+    return coverage?.preview ? "artifact handler" : "renderer default preview";
+  }
+
+  if (mode === "open") {
+    if (coverage?.open) {
+      return "artifact handler";
+    }
+
+    return diagnostics?.hostBridgeOpenUrlEnabled ? "hostBridge.openUrl" : "renderer default openURL";
+  }
+
+  if (mode === "share") {
+    if (coverage?.share) {
+      return "artifact handler";
+    }
+
+    return diagnostics?.hostBridgeShareEnabled ? "hostBridge.share" : "renderer default share sheet";
+  }
+
+  if (coverage?.download) {
+    return "artifact handler";
+  }
+
+  return diagnostics?.hostBridgeOpenUrlEnabled ? "hostBridge.openUrl" : "renderer default openURL";
+}
+
+function describeCapabilityGrantRoute(capability: CapabilityRequest["capability"], diagnostics?: RendererDiagnostics) {
+  const coverage = diagnostics?.capabilityHandlerCoverage.find((item) => item.capability === capability);
+
+  if (coverage?.resolve) {
+    return "capability handler";
+  }
+
+  if (capability === "open-url") {
+    return diagnostics?.hostBridgeOpenUrlEnabled ? "hostBridge.openUrl" : "renderer default openURL";
+  }
+
+  if (capability === "share") {
+    return diagnostics?.hostBridgeShareEnabled ? "hostBridge.share" : "renderer default share sheet";
+  }
+
+  return diagnostics?.hostBridgeResolveCapabilityEnabled ? "hostBridge.resolveCapability" : "renderer default mock payload";
+}
+
+function describeCapabilityDenyRoute(capability: CapabilityRequest["capability"], diagnostics?: RendererDiagnostics) {
+  const coverage = diagnostics?.capabilityHandlerCoverage.find((item) => item.capability === capability);
+
+  if (coverage?.resolve) {
+    return "capability handler";
+  }
+
+  return diagnostics?.hostBridgeResolveCapabilityEnabled ? "hostBridge.resolveCapability" : "no explicit deny resolver";
+}
+
+function createBridgeRoutingItems(diagnostics?: RendererDiagnostics): DetailItem[] {
+  return [
+    {
+      id: "bridge-routing-artifact-link",
+      label: "Artifact link",
+      value: `preview ${describeArtifactRoute("link", "preview", diagnostics)} · open ${describeArtifactRoute("link", "open", diagnostics)} · share ${describeArtifactRoute("link", "share", diagnostics)}`,
+      tone: "default"
+    },
+    {
+      id: "bridge-routing-artifact-pdf",
+      label: "Artifact pdf",
+      value: `preview ${describeArtifactRoute("pdf", "preview", diagnostics)} · open ${describeArtifactRoute("pdf", "open", diagnostics)} · download ${describeArtifactRoute("pdf", "download", diagnostics)}`,
+      tone: "default"
+    },
+    {
+      id: "bridge-routing-artifact-image",
+      label: "Artifact image",
+      value: `preview ${describeArtifactRoute("image", "preview", diagnostics)} · open ${describeArtifactRoute("image", "open", diagnostics)} · share ${describeArtifactRoute("image", "share", diagnostics)}`,
+      tone: "default"
+    },
+    {
+      id: "bridge-routing-cap-open-url",
+      label: "Capability open-url",
+      value: `grant ${describeCapabilityGrantRoute("open-url", diagnostics)} · deny ${describeCapabilityDenyRoute("open-url", diagnostics)}`,
+      tone: "default"
+    },
+    {
+      id: "bridge-routing-cap-share",
+      label: "Capability share",
+      value: `grant ${describeCapabilityGrantRoute("share", diagnostics)} · deny ${describeCapabilityDenyRoute("share", diagnostics)}`,
+      tone: "default"
+    },
+    {
+      id: "bridge-routing-cap-device",
+      label: "Capability device",
+      value: `microphone ${describeCapabilityGrantRoute("microphone", diagnostics)} · camera ${describeCapabilityGrantRoute("camera", diagnostics)} · file-picker ${describeCapabilityGrantRoute("file-picker", diagnostics)}`,
+      tone:
+        diagnostics?.hostBridgeResolveCapabilityEnabled || (diagnostics?.capabilityHandlerKinds.length ?? 0) > 0
+          ? "success"
+          : "warning"
+    }
+  ];
+}
+
 function getInteractionTone(value: "enabled" | "locked"): DetailItem["tone"] {
   return value === "locked" ? "warning" : "success";
 }
 
-function createRuntimeDetailsBlock(block: DetailsBlock, runtime: RuntimeContextValue): DetailsBlock {
+function createRuntimeDetailsBlock(
+  block: DetailsBlock,
+  runtime: RuntimeContextValue,
+  diagnostics?: RendererDiagnostics
+): DetailsBlock {
   if (!block.source) {
     return block;
   }
@@ -1732,6 +3242,136 @@ function createRuntimeDetailsBlock(block: DetailsBlock, runtime: RuntimeContextV
         tone: getInteractionTone(runtime.interaction.artifacts)
       }
     ];
+  } else if (block.source === "runtime.bridgeAssertions") {
+    items = createBridgeAssertionItems(runtime);
+  } else if (block.source === "runtime.bridgeVerdict") {
+    items = createBridgeVerdictItems(runtime);
+  } else if (block.source === "runtime.bridgeIntegration") {
+    items = createBridgeIntegrationItems(diagnostics);
+  } else if (block.source === "runtime.bridgeRouting") {
+    items = createBridgeRoutingItems(diagnostics);
+  } else if (block.source === "runtime.bridgeErrors") {
+    items = [
+      {
+        id: `${block.id}-artifact-bridge-error`,
+        label: "Artifact bridge error",
+        value: diagnostics?.artifactBridgeError ?? "None",
+        tone: diagnostics?.artifactBridgeError ? "danger" : "default"
+      },
+      {
+        id: `${block.id}-capability-bridge-error`,
+        label: "Capability bridge error",
+        value: diagnostics?.capabilityBridgeError ?? "None",
+        tone: diagnostics?.capabilityBridgeError ? "danger" : "default"
+      },
+      {
+        id: `${block.id}-active-capability`,
+        label: "Pending capability",
+        value: runtime.capabilityRequests[0] ? getCapabilityDisplayName(runtime.capabilityRequests[0].capability) : "None",
+        tone: runtime.capabilityRequests[0] ? "warning" : "default"
+      }
+    ];
+  } else if (block.source === "runtime.navigation") {
+    items = createRuntimeNavigationDetailItems(runtime, block.id);
+  } else if (block.source === "runtime.persistence") {
+    items = createRuntimePersistenceDetailItems(runtime, block.id);
+  } else if (block.source === "runtime.transport") {
+    items = [
+      {
+        id: `${block.id}-connect-state`,
+        label: "Connect state",
+        value: runtime.transport.connectState,
+        tone:
+          runtime.transport.connectState === "connected"
+            ? "success"
+            : runtime.transport.connectState === "error"
+              ? "danger"
+              : runtime.transport.connectState === "connecting"
+                ? "warning"
+                : "default"
+      },
+      {
+        id: `${block.id}-connect-count`,
+        label: "Connect count",
+        value: String(runtime.transport.connectCount)
+      },
+      {
+        id: `${block.id}-disconnect-count`,
+        label: "Disconnect count",
+        value: String(runtime.transport.disconnectCount)
+      },
+      {
+        id: `${block.id}-reconnect-count`,
+        label: "Reconnect count",
+        value: String(runtime.transport.reconnectCount)
+      },
+      {
+        id: `${block.id}-last-connected-at`,
+        label: "Last connected",
+        value: runtime.transport.lastConnectedAt ? formatHistoryTimestamp(runtime.transport.lastConnectedAt) : "None"
+      },
+      {
+        id: `${block.id}-last-disconnected-at`,
+        label: "Last disconnected",
+        value: runtime.transport.lastDisconnectedAt ? formatHistoryTimestamp(runtime.transport.lastDisconnectedAt) : "None"
+      },
+      {
+        id: `${block.id}-last-connect-error`,
+        label: "Connect error",
+        value: runtime.transport.lastConnectError ?? "None"
+      }
+    ];
+  } else if (block.source === "runtime.recovery") {
+    items = [
+      {
+        id: `${block.id}-mode`,
+        label: "Recovery mode",
+        value: runtime.recovery.mode,
+        tone:
+          runtime.recovery.mode === "restored"
+            ? "success"
+            : runtime.recovery.mode === "reset"
+              ? "warning"
+              : runtime.recovery.mode === "reconnected"
+                ? "warning"
+                : "default"
+      },
+      {
+        id: `${block.id}-reset-count`,
+        label: "Reset count",
+        value: String(runtime.recovery.resetCount)
+      },
+      {
+        id: `${block.id}-reconnect-count`,
+        label: "Reconnect count",
+        value: String(runtime.recovery.reconnectCount)
+      },
+      {
+        id: `${block.id}-last-reset-at`,
+        label: "Last reset",
+        value: runtime.recovery.lastResetAt ? formatHistoryTimestamp(runtime.recovery.lastResetAt) : "None"
+      },
+      {
+        id: `${block.id}-last-reconnect-at`,
+        label: "Last reconnect",
+        value: runtime.recovery.lastReconnectAt ? formatHistoryTimestamp(runtime.recovery.lastReconnectAt) : "None"
+      },
+      {
+        id: `${block.id}-last-recovery-at`,
+        label: "Last recovery event",
+        value: runtime.recovery.lastRecoveryAt ? formatHistoryTimestamp(runtime.recovery.lastRecoveryAt) : "None"
+      },
+      {
+        id: `${block.id}-cleared-on-reset`,
+        label: "Cleared persistence on last reset",
+        value: runtime.recovery.clearedPersistenceOnLastReset ? "yes" : "no",
+        tone: runtime.recovery.clearedPersistenceOnLastReset ? "success" : "default"
+      }
+    ];
+  } else if (block.source === "runtime.recoveryAssertions") {
+    items = createRecoveryAssertionItems(runtime);
+  } else if (block.source === "runtime.recoveryVerdict") {
+    items = createRecoveryVerdictItems(runtime);
   } else if (block.source === "runtime.interaction") {
     items = [
       {
@@ -1884,6 +3524,58 @@ function createRuntimeDetailsBlock(block: DetailsBlock, runtime: RuntimeContextV
   } else if (block.source === "runtime.lastCompletedRequestResources" || block.source === "runtime.requestResources") {
     const chain = getResolvedRequestChain(runtime, block.source, block.requestTarget);
     items = createRequestResourceDetailItems(chain.entries, chain.requestId);
+  } else if (block.source === "runtime.requestStageSummary") {
+    const chain = getResolvedRequestChain(runtime, block.source, block.requestTarget);
+    const stages = getRuntimeRequestTimelineStageSummaries(chain.entries, chain.requestId);
+    const latestStage = stages[stages.length - 1];
+    const patchStages = stages.filter((stage) => stage.patchCount > 0).length;
+    const resourceStages = stages.filter((stage) => stage.resourceCount > 0).length;
+    const issueStages = stages.filter((stage) => stage.issueCount > 0).length;
+
+    items = [
+      {
+        id: `${block.id}-stage-count`,
+        label: "Stages",
+        value: String(stages.length),
+        tone: stages.length > 0 ? "success" : "default"
+      },
+      {
+        id: `${block.id}-latest-stage`,
+        label: "Latest stage",
+        value: latestStage?.title ?? "None"
+      },
+      {
+        id: `${block.id}-latest-stage-status`,
+        label: "Latest status",
+        value: latestStage?.status ?? "None",
+        tone:
+          latestStage?.status === "complete"
+            ? "success"
+            : latestStage?.status === "active"
+              ? "warning"
+              : latestStage?.status === "error"
+                ? "danger"
+                : "default"
+      },
+      {
+        id: `${block.id}-patch-stages`,
+        label: "Patch stages",
+        value: String(patchStages),
+        tone: patchStages > 0 ? "success" : "default"
+      },
+      {
+        id: `${block.id}-resource-stages`,
+        label: "Resource stages",
+        value: String(resourceStages),
+        tone: resourceStages > 0 ? "success" : "default"
+      },
+      {
+        id: `${block.id}-issue-stages`,
+        label: "Issue stages",
+        value: String(issueStages),
+        tone: issueStages > 0 ? "danger" : "success"
+      }
+    ];
   } else if (block.source === "runtime.session") {
     items = [
       {
@@ -1915,6 +3607,44 @@ function createRuntimeDetailsBlock(block: DetailsBlock, runtime: RuntimeContextV
         id: `${block.id}-event-count`,
         label: "Event entries",
         value: String(runtime.eventLog.length)
+      },
+      {
+        id: `${block.id}-persistence`,
+        label: "Persistence",
+        value: runtime.persistence.enabled ? "enabled" : "disabled",
+        tone: runtime.persistence.enabled ? "success" : "default"
+      },
+      {
+        id: `${block.id}-hydrated`,
+        label: "Hydrated snapshot",
+        value: runtime.persistence.hydratedFromSnapshot ? "yes" : "no",
+        tone: runtime.persistence.hydratedFromSnapshot ? "success" : "default"
+      },
+      {
+        id: `${block.id}-save-state`,
+        label: "Save state",
+        value: runtime.persistence.saveState,
+        tone:
+          runtime.persistence.saveState === "ready"
+            ? "success"
+            : runtime.persistence.saveState === "error"
+              ? "danger"
+              : runtime.persistence.saveState === "saving"
+                ? "warning"
+                : "default"
+      },
+      {
+        id: `${block.id}-connect-state`,
+        label: "Connect state",
+        value: runtime.transport.connectState,
+        tone:
+          runtime.transport.connectState === "connected"
+            ? "success"
+            : runtime.transport.connectState === "error"
+              ? "danger"
+              : runtime.transport.connectState === "connecting"
+                ? "warning"
+                : "default"
       }
     ];
   } else if (block.source === "runtime.currentRequestAssertions" || block.source === "runtime.requestAssertions") {
@@ -1958,9 +3688,45 @@ function createRuntimeDetailsBlock(block: DetailsBlock, runtime: RuntimeContextV
   };
 }
 
-function resolveRuntimeLeafBlock(block: LeafBlock, runtime: RuntimeContextValue): LeafBlock {
+function resolveRuntimeLeafBlock(
+  block: LeafBlock,
+  runtime: RuntimeContextValue,
+  diagnostics?: RendererDiagnostics
+): LeafBlock {
+  if (block.type === "actions" && block.source) {
+    if (block.source === "runtime.requestIndexActions") {
+      return {
+        ...block,
+        items: createRequestIndexActionItems(runtime, block.maxItems)
+      };
+    }
+
+    if (block.source === "runtime.persistenceActions") {
+      return {
+        ...block,
+        items: createRuntimePersistenceActionItems(runtime).slice(0, block.maxItems ?? 8)
+      };
+    }
+
+    if (block.source === "runtime.sessionActions") {
+      return {
+        ...block,
+        items: createRuntimeSessionActionItems(runtime).slice(0, block.maxItems ?? 8)
+      };
+    }
+  }
+
+  if (block.type === "timeline" && block.source === "runtime.requestTimeline") {
+    const chain = getResolvedRequestChain(runtime, block.source, block.requestTarget);
+
+    return {
+      ...block,
+      items: getRuntimeRequestTimelineItems(chain.entries, chain.requestId, block.maxItems)
+    };
+  }
+
   if (block.type === "details" && block.source) {
-    return createRuntimeDetailsBlock(block, runtime);
+    return createRuntimeDetailsBlock(block, runtime, diagnostics);
   }
 
   if (block.type !== "log" || !block.source) {
@@ -1986,6 +3752,42 @@ function resolveRuntimeLeafBlock(block: LeafBlock, runtime: RuntimeContextValue)
     };
 
     return requestIndexLogBlock;
+  }
+
+  if (block.source === "runtime.requestStageLog") {
+    const requestStageLogBlock: LogBlock = {
+      ...block,
+      items: createRequestStageLogItems(runtime, block.source, block.requestTarget, block.maxItems)
+    };
+
+    return requestStageLogBlock;
+  }
+
+  if (block.source === "runtime.transportLog") {
+    const transportLogBlock: LogBlock = {
+      ...block,
+      items: createRuntimeTransportLogItems(runtime, block.maxItems)
+    };
+
+    return transportLogBlock;
+  }
+
+  if (block.source === "runtime.persistenceLog") {
+    const persistenceLogBlock: LogBlock = {
+      ...block,
+      items: createRuntimePersistenceLogItems(runtime, block.maxItems)
+    };
+
+    return persistenceLogBlock;
+  }
+
+  if (block.source === "runtime.sessionLog") {
+    const sessionLogBlock: LogBlock = {
+      ...block,
+      items: createRuntimeSessionLogItems(runtime, block.maxItems)
+    };
+
+    return sessionLogBlock;
   }
 
   if (block.source === "runtime.capabilityHistory") {
@@ -2088,33 +3890,39 @@ function resolveRuntimeLeafBlock(block: LeafBlock, runtime: RuntimeContextValue)
   return runtimeLogBlock;
 }
 
-function resolveRuntimeNestableBlock(block: NestableBlock, runtime: RuntimeContextValue): NestableBlock {
+function resolveRuntimeNestableBlock(
+  block: NestableBlock,
+  runtime: RuntimeContextValue,
+  diagnostics?: RendererDiagnostics
+): NestableBlock {
   if (block.type === "section") {
     return {
       ...block,
-      blocks: block.blocks.map((childBlock): LeafBlock => resolveRuntimeLeafBlock(childBlock, runtime))
+      blocks: block.blocks.map((childBlock): LeafBlock => resolveRuntimeLeafBlock(childBlock, runtime, diagnostics))
     };
   }
 
-  return resolveRuntimeLeafBlock(block, runtime);
+  return resolveRuntimeLeafBlock(block, runtime, diagnostics);
 }
 
-function resolveRuntimeBlock(block: Block, runtime: RuntimeContextValue): Block {
+function resolveRuntimeBlock(block: Block, runtime: RuntimeContextValue, diagnostics?: RendererDiagnostics): Block {
   if (block.type === "split") {
     return {
       ...block,
       panes: block.panes.map((pane) => ({
         ...pane,
-        blocks: pane.blocks.map((childBlock): NestableBlock => resolveRuntimeNestableBlock(childBlock, runtime))
+        blocks: pane.blocks.map((childBlock): NestableBlock =>
+          resolveRuntimeNestableBlock(childBlock, runtime, diagnostics)
+        )
       }))
     };
   }
 
-  return resolveRuntimeNestableBlock(block, runtime);
+  return resolveRuntimeNestableBlock(block, runtime, diagnostics);
 }
 
-function resolveRuntimeBlocks(blocks: Block[], runtime: RuntimeContextValue) {
-  return blocks.map((block) => resolveRuntimeBlock(block, runtime));
+function resolveRuntimeBlocks(blocks: Block[], runtime: RuntimeContextValue, diagnostics?: RendererDiagnostics) {
+  return blocks.map((block) => resolveRuntimeBlock(block, runtime, diagnostics));
 }
 
 function collectBlockTypes(blocks: Block[]) {
@@ -2273,6 +4081,191 @@ function getNavStatusLabel(runtime: RuntimeContextValue, isListening: boolean) {
     default:
       return "Ready";
   }
+}
+
+function getFallbackScreenTitle(runtime: RuntimeContextValue) {
+  if (runtime.screen?.title) {
+    return runtime.screen.title;
+  }
+
+  if (runtime.screenMode === "processing" || runtime.status === "thinking" || runtime.status === "running") {
+    return "Processing";
+  }
+
+  if (runtime.screenMode === "approval") {
+    return "Approval";
+  }
+
+  if (runtime.screenMode === "task") {
+    return "Task";
+  }
+
+  if (runtime.screenMode === "result") {
+    return "Result";
+  }
+
+  return "Workspace";
+}
+
+function getFallbackWorkspaceMessage(runtime: RuntimeContextValue) {
+  if (runtime.error) {
+    return runtime.error;
+  }
+
+  if (runtime.screenMode === "processing" || runtime.status === "thinking" || runtime.status === "running") {
+    return runtime.flow.requestId
+      ? `Waiting for the harness to publish the next workspace surface for ${formatHistoryRequestId(runtime.flow.requestId)}.`
+      : "Waiting for the harness to publish the next workspace surface.";
+  }
+
+  if (runtime.screenMode === "approval") {
+    return "The runtime is waiting for a capability or approval surface from the harness.";
+  }
+
+  if (runtime.screenMode === "result") {
+    return "The previous request completed without a result surface. Publish a result screen or reset to a stable workspace.";
+  }
+
+  if (runtime.screenMode === "task") {
+    return "The runtime is inside a task flow, but no task workspace has been published yet.";
+  }
+
+  return "The runtime is ready. Submit voice or text input to start the next request flow.";
+}
+
+function formatRuntimeLockSummary(runtime: RuntimeContextValue) {
+  const locked: string[] = [];
+
+  if (runtime.interaction.input === "locked") {
+    locked.push("input");
+  }
+
+  if (runtime.interaction.actions === "locked") {
+    locked.push("actions");
+  }
+
+  if (runtime.interaction.forms === "locked") {
+    locked.push("forms");
+  }
+
+  if (runtime.interaction.artifacts === "locked") {
+    locked.push("artifacts");
+  }
+
+  return locked.length > 0 ? locked.join(", ") : "none";
+}
+
+function getRuntimeStageBanner(runtime: RuntimeContextValue) {
+  const activeCapability = runtime.capabilityRequests[0];
+
+  if (runtime.error || runtime.screenMode === "error") {
+    return {
+      tone: "danger" as const,
+      label: "Runtime issue",
+      message: runtime.error ?? "The runtime is in an error state and requires recovery."
+    };
+  }
+
+  if (runtime.screenMode === "approval" || activeCapability) {
+    return {
+      tone: "warning" as const,
+      label: "Approval pending",
+      message: activeCapability
+        ? `Waiting for ${getCapabilityDisplayName(activeCapability.capability)} to be resolved before the request can continue.`
+        : "The runtime is waiting for an approval or capability decision."
+    };
+  }
+
+  if (runtime.screenMode === "processing" || runtime.status === "thinking" || runtime.status === "running") {
+    return {
+      tone: "info" as const,
+      label: "Processing",
+      message: runtime.interaction.reason ?? "The runtime is waiting for the harness to advance the active request."
+    };
+  }
+
+  if (runtime.screenMode === "task") {
+    return {
+      tone: "info" as const,
+      label: "Task in progress",
+      message: runtime.interaction.reason ?? "The runtime is holding on an in-flight task workspace."
+    };
+  }
+
+  if (runtime.screenMode === "result" && runtime.flow.lastCompletedRequestId) {
+    return {
+      tone: "success" as const,
+      label: "Result ready",
+      message: "The latest request has completed and the result surface is ready for review."
+    };
+  }
+
+  return undefined;
+}
+
+function createRuntimeStageFacts(runtime: RuntimeContextValue) {
+  const facts: Array<{ label: string; value: string; tone?: "default" | "success" | "warning" | "danger" }> = [];
+  const activeCapability = runtime.capabilityRequests[0];
+
+  if (runtime.flow.requestId) {
+    facts.push({
+      label: "Request",
+      value: formatHistoryRequestId(runtime.flow.requestId) ?? runtime.flow.requestId
+    });
+  }
+
+  if (runtime.flow.source) {
+    facts.push({
+      label: "Source",
+      value: formatHistoryRequestSource(runtime.flow.source) ?? runtime.flow.source,
+      tone: "success"
+    });
+  }
+
+  if (runtime.flow.phase !== "idle") {
+    facts.push({
+      label: "Flow",
+      value: runtime.flow.phase,
+      tone:
+        runtime.flow.phase === "complete"
+          ? "success"
+          : runtime.flow.phase === "active" || runtime.flow.phase === "pending"
+            ? "warning"
+            : "default"
+    });
+  }
+
+  const lockSummary = formatRuntimeLockSummary(runtime);
+  if (lockSummary !== "none") {
+    facts.push({
+      label: "Locked",
+      value: lockSummary,
+      tone: "warning"
+    });
+  }
+
+  if (activeCapability) {
+    facts.push({
+      label: "Capability",
+      value: getCapabilityDisplayName(activeCapability.capability),
+      tone: "warning"
+    });
+  }
+
+  if (runtime.recovery.mode !== "fresh") {
+    facts.push({
+      label: "Recovery",
+      value: runtime.recovery.mode,
+      tone:
+        runtime.recovery.mode === "restored"
+          ? "success"
+          : runtime.recovery.mode === "reset" || runtime.recovery.mode === "reconnected"
+            ? "warning"
+            : "default"
+    });
+  }
+
+  return facts;
 }
 
 function formatHistoryTimestamp(timestamp: string) {
@@ -2537,7 +4530,7 @@ function createRendererTransitionSnapshot(
   };
 }
 
-function SessionHistoryModal({ history, historyEnabled, visible, onClose }: HistoryModalProps) {
+function SessionHistoryModal({ history, historyEnabled, visible, onClose, onInspectRequest }: HistoryModalProps) {
   const [filter, setFilter] = useState<HistoryFilter>("all");
 
   useEffect(() => {
@@ -2663,7 +4656,19 @@ function SessionHistoryModal({ history, historyEnabled, visible, onClose }: Hist
                   {groupedHistory.length > 0 ? (
                     <View style={styles.historyRequestGroupList}>
                       {groupedHistory.map((group) => (
-                        <View key={group.id} style={styles.historyRequestGroupCard}>
+                        <Pressable
+                          key={group.id}
+                          disabled={!group.requestId}
+                          onPress={() => {
+                            if (group.requestId) {
+                              onInspectRequest(group.requestId);
+                            }
+                          }}
+                          style={[
+                            styles.historyRequestGroupCard,
+                            group.requestId ? styles.historyRequestGroupCardPressable : null
+                          ]}
+                        >
                           <View style={styles.historyRequestGroupHeader}>
                             <Text style={styles.historyRequestGroupTitle}>{getHistoryGroupTitle(group)}</Text>
                             {group.requestId ? (
@@ -2675,7 +4680,7 @@ function SessionHistoryModal({ history, historyEnabled, visible, onClose }: Hist
                           <Text style={styles.historyRequestGroupMeta}>{getHistoryGroupNote(group)}</Text>
                           <Text style={styles.historyRequestGroupMeta}>{getHistoryGroupSummary(group)}</Text>
                           <Text style={styles.historyRequestGroupKinds}>{getHistoryGroupKinds(group)}</Text>
-                        </View>
+                        </Pressable>
                       ))}
                     </View>
                   ) : null}
@@ -2733,36 +4738,285 @@ function SessionHistoryModal({ history, historyEnabled, visible, onClose }: Hist
   );
 }
 
-function AgentRuntimeContent({
-  voiceShell,
-  artifactHandlers,
-  capabilityHandlers,
-  hostBridge,
-  renderVoiceShell,
-  transitionHooks
+function RequestInspectorModal({
+  runtime,
+  visible,
+  target,
+  onClose,
+  onAction
 }: {
+  runtime: RuntimeContextValue;
+  visible: boolean;
+  target: RequestTarget;
+  onClose(): void;
+  onAction(action: ActionItem): void;
+}) {
+  const normalizedTarget = normalizeRequestTarget(target);
+  const resolvedBlocks = resolveRuntimeBlocks(buildRequestInspectorBlocks(normalizedTarget), runtime);
+  const chain = getResolvedRequestChain(runtime, "runtime.request", normalizedTarget);
+  const [targetInput, setTargetInput] = useState(
+    normalizedTarget === "current" || normalizedTarget === "lastCompleted" ? "" : normalizedTarget
+  );
+  const title =
+    normalizedTarget === "current"
+      ? "Current request inspector"
+      : normalizedTarget === "lastCompleted"
+        ? "Last completed request inspector"
+        : `Request ${chain.requestId ?? normalizedTarget}`;
+  const subtitle =
+    normalizedTarget === "current"
+      ? "Renderer-level inspector driven by the active runtime request chain."
+      : normalizedTarget === "lastCompleted"
+        ? "Renderer-level inspector driven by the most recent completed request chain."
+        : "Renderer-level inspector driven by an explicit request target.";
+  const explicitTarget = targetInput.trim();
+
+  useEffect(() => {
+    setTargetInput(normalizedTarget === "current" || normalizedTarget === "lastCompleted" ? "" : normalizedTarget);
+  }, [normalizedTarget, visible]);
+
+  function openExplicitTarget() {
+    if (!explicitTarget) {
+      return;
+    }
+
+    onAction({
+      id: "show-request-inspector",
+      label: "Open request",
+      payload: {
+        requestTarget: explicitTarget
+      }
+    });
+  }
+
+  return (
+    <Modal animationType="slide" presentationStyle="fullScreen" transparent={false} visible={visible} onRequestClose={onClose}>
+      <View style={styles.inspectorScreen}>
+        <SafeAreaView style={styles.inspectorNavChrome}>
+          <View style={styles.inspectorNavBar}>
+            <View style={styles.inspectorNavSpacer} />
+            <View style={styles.inspectorNavCenter}>
+              <Text numberOfLines={1} style={styles.inspectorNavTitle}>
+                {title}
+              </Text>
+              <Text numberOfLines={1} style={styles.inspectorNavSubtitle}>
+                {subtitle}
+              </Text>
+            </View>
+            <Pressable style={styles.inspectorCloseButton} onPress={onClose}>
+              <Text style={styles.inspectorCloseButtonText}>Close</Text>
+            </Pressable>
+          </View>
+        </SafeAreaView>
+        <ScrollView contentContainerStyle={styles.inspectorContent} showsVerticalScrollIndicator={false}>
+          <View style={styles.inspectorTargetDock}>
+            <Text style={styles.inspectorTargetLabel}>Open explicit requestId</Text>
+            <View style={styles.inspectorTargetRow}>
+              <TextInput
+                value={targetInput}
+                onChangeText={setTargetInput}
+                placeholder="voice-... / input-... / action-... / form-..."
+                placeholderTextColor="#9CA3AF"
+                style={styles.inspectorTargetInput}
+                autoCapitalize="none"
+                autoCorrect={false}
+                returnKeyType="go"
+                onSubmitEditing={openExplicitTarget}
+              />
+              <Pressable
+                disabled={!explicitTarget}
+                onPress={openExplicitTarget}
+                style={[
+                  styles.inspectorTargetButton,
+                  !explicitTarget ? styles.inspectorTargetButtonDisabled : null
+                ]}
+              >
+                <Text
+                  style={[
+                    styles.inspectorTargetButtonText,
+                    !explicitTarget ? styles.inspectorTargetButtonTextDisabled : null
+                  ]}
+                >
+                  Open
+                </Text>
+              </Pressable>
+            </View>
+          </View>
+          {resolvedBlocks.map((block) => (
+            <View key={block.id} style={styles.blockRevealWrap}>
+              <CoreBlock
+                block={block}
+                onAction={onAction}
+                onFormSubmit={() => undefined}
+                onArtifact={() => undefined}
+                interaction={{
+                  actionsDisabled: false,
+                  formsDisabled: true,
+                  artifactsDisabled: true
+                }}
+              />
+            </View>
+          ))}
+        </ScrollView>
+      </View>
+    </Modal>
+  );
+}
+
+interface AgentRuntimeContentProps {
   voiceShell?: VoiceShellOptions;
   artifactHandlers?: ArtifactHandlers;
   capabilityHandlers?: CapabilityHandlers;
   hostBridge?: HostBridge;
   renderVoiceShell?: (props: VoiceShellRenderProps) => ReactNode;
   transitionHooks?: RendererTransitionHooks;
-}) {
+  navigationHooks?: RendererNavigationHooks;
+}
+
+const AgentRuntimeContent = forwardRef<AgentRuntimeViewHandle, AgentRuntimeContentProps>(function AgentRuntimeContent({
+  voiceShell,
+  artifactHandlers,
+  capabilityHandlers,
+  hostBridge,
+  renderVoiceShell,
+  transitionHooks,
+  navigationHooks
+}, ref) {
   const runtime = useAgentRuntime();
   const screen = runtime.screen;
-  const resolvedBlocks = screen ? resolveRuntimeBlocks(screen.blocks, runtime) : [];
   const clientEventLockRef = useRef(false);
   const transitionHooksRef = useRef(transitionHooks);
+  const navigationHooksRef = useRef(navigationHooks);
   const previousTransitionSnapshotRef = useRef<RendererTransitionSnapshot | undefined>(undefined);
+  const previousRequestInspectorSnapshotRef = useRef<RendererRequestInspectorSnapshot | undefined>(undefined);
+  const previousHistoryVisibleRef = useRef<boolean | undefined>(undefined);
   const voiceShellConfig = resolveVoiceShellConfig(voiceShell);
-  const [historyVisible, setHistoryVisible] = useState(false);
   const [navHeight, setNavHeight] = useState(108);
   const [previewArtifact, setPreviewArtifact] = useState<ArtifactPreviewState | null>(null);
   const [artifactBridgeError, setArtifactBridgeError] = useState<string>();
   const [capabilityBridgeError, setCapabilityBridgeError] = useState<string>();
   const [dismissedCapabilityIds, setDismissedCapabilityIds] = useState<string[]>([]);
+  const artifactHandlerKinds = Object.keys(artifactHandlers ?? {}) as ArtifactRef["kind"][];
+  const capabilityHandlerKinds = Object.keys(capabilityHandlers ?? {}) as CapabilityRequest["capability"][];
+  const artifactHandlerCoverage = artifactKindCatalog.map((kind) => {
+    const handler = artifactHandlers?.[kind];
+
+    return {
+      kind,
+      preview: Boolean(handler?.preview),
+      open: Boolean(handler?.open),
+      share: Boolean(handler?.share),
+      download: Boolean(handler?.download)
+    };
+  });
+  const capabilityHandlerCoverage = capabilityCatalog.map((capability) => {
+    const handler = capabilityHandlers?.[capability];
+
+    return {
+      capability,
+      describe: Boolean(handler?.describe),
+      resolve: Boolean(handler?.resolve)
+    };
+  });
+  const diagnostics: RendererDiagnostics = {
+    artifactBridgeError,
+    capabilityBridgeError,
+    hostBridgeOpenUrlEnabled: Boolean(hostBridge?.openUrl),
+    hostBridgeShareEnabled: Boolean(hostBridge?.share),
+    hostBridgeResolveCapabilityEnabled: Boolean(hostBridge?.resolveCapability),
+    artifactHandlerKinds,
+    capabilityHandlerKinds,
+    artifactHandlerCoverage,
+    capabilityHandlerCoverage
+  };
+  const resolvedBlocks = screen ? resolveRuntimeBlocks(screen.blocks, runtime, diagnostics) : [];
   const activeCapabilityRequest =
     runtime.capabilityRequests.find((request) => !dismissedCapabilityIds.includes(request.id)) ?? null;
+  const historyVisible = runtime.navigation.historyVisible;
+  const requestInspectorState = runtime.navigation.requestInspector;
+
+  async function sendNavigationChange(change: NavigationChange) {
+    await runtime.sendClientEvent({
+      type: "navigation.changed",
+      navigation: change
+    });
+  }
+
+  function setHistoryVisibility(visible: boolean) {
+    void sendNavigationChange({
+      surface: "history",
+      visibility: visible ? "open" : "closed"
+    });
+  }
+
+  function openRequestInspector(target?: RequestTarget) {
+    void sendNavigationChange({
+      surface: "request-inspector",
+      visibility: "open",
+      requestTarget: normalizeRequestTarget(target)
+    });
+  }
+
+  function closeRequestInspector() {
+    void sendNavigationChange({
+      surface: "request-inspector",
+      visibility: "closed",
+      requestTarget: requestInspectorState.target
+    });
+  }
+
+  async function handleRendererAction(action: ActionItem) {
+    const navigationChange = resolveNavigationChangeFromAction(action);
+
+    if (navigationChange) {
+      await sendNavigationChange(navigationChange);
+      return;
+    }
+
+    if (action.id === "clear-runtime-persistence") {
+      await runtime.clearPersistence();
+      return;
+    }
+
+    if (action.id === "reconnect-runtime") {
+      await runtime.reconnect();
+      return;
+    }
+
+    if (action.id === "reset-runtime-session") {
+      await runtime.resetSession();
+      return;
+    }
+
+    if (action.id === "reset-runtime-session-and-clear-persistence") {
+      await runtime.resetSession({
+        clearPersistence: true
+      });
+      return;
+    }
+
+    await sendLockedClientEvent({
+      type: "action.triggered",
+      actionId: action.id,
+      payload: action.payload
+    });
+  }
+
+  useImperativeHandle(
+    ref,
+    () => ({
+      openHistory: () => {
+        setHistoryVisibility(true);
+      },
+      closeHistory: () => setHistoryVisibility(false),
+      openRequestInspector: (target) => openRequestInspector(target),
+      closeRequestInspector,
+      clearPersistence: () => runtime.clearPersistence(),
+      reconnect: () => runtime.reconnect(),
+      resetSession: (options) => runtime.resetSession(options)
+    }),
+    [requestInspectorState.target, runtime]
+  );
   const shellLocked = runtime.interaction.input === "locked";
   const {
     inputMode,
@@ -2829,6 +5083,10 @@ function AgentRuntimeContent({
   useEffect(() => {
     transitionHooksRef.current = transitionHooks;
   }, [transitionHooks]);
+
+  useEffect(() => {
+    navigationHooksRef.current = navigationHooks;
+  }, [navigationHooks]);
 
   useEffect(() => {
     if (runtime.phase === "error") {
@@ -2925,6 +5183,51 @@ function AgentRuntimeContent({
 
     previousTransitionSnapshotRef.current = transitionSnapshot;
   }, [transitionSnapshot]);
+
+  useEffect(() => {
+    const currentSnapshot = createRequestInspectorSnapshot(runtime, requestInspectorState);
+    const previousSnapshot = previousRequestInspectorSnapshotRef.current;
+
+    if (!previousSnapshot) {
+      previousRequestInspectorSnapshotRef.current = currentSnapshot;
+      return;
+    }
+
+    if (
+      previousSnapshot.visible !== currentSnapshot.visible ||
+      previousSnapshot.target !== currentSnapshot.target ||
+      previousSnapshot.resolvedRequestId !== currentSnapshot.resolvedRequestId ||
+      previousSnapshot.source !== currentSnapshot.source ||
+      previousSnapshot.entryCount !== currentSnapshot.entryCount ||
+      previousSnapshot.latestTitle !== currentSnapshot.latestTitle ||
+      previousSnapshot.hasResultScreen !== currentSnapshot.hasResultScreen
+    ) {
+      navigationHooksRef.current?.onRequestInspectorChange?.({
+        previous: previousSnapshot,
+        current: currentSnapshot
+      });
+    }
+
+    previousRequestInspectorSnapshotRef.current = currentSnapshot;
+  }, [runtime, requestInspectorState]);
+
+  useEffect(() => {
+    const previousVisible = previousHistoryVisibleRef.current;
+
+    if (previousVisible === undefined) {
+      previousHistoryVisibleRef.current = historyVisible;
+      return;
+    }
+
+    if (previousVisible !== historyVisible) {
+      navigationHooksRef.current?.onHistoryVisibilityChange?.({
+        previous: previousVisible,
+        current: historyVisible
+      });
+    }
+
+    previousHistoryVisibleRef.current = historyVisible;
+  }, [historyVisible]);
 
   const contentContainerStyle: StyleProp<ViewStyle> = [
     styles.container,
@@ -3340,13 +5643,7 @@ function AgentRuntimeContent({
         handlerResult =
           (await getCapabilityHandler(request)?.resolve?.(request, granted)) ??
           (await hostBridge?.resolveCapability?.(request, granted, {
-            defaultPayload: {
-              bridge: "renderer-default-mock",
-              capability: request.capability,
-              granted: false,
-              mock: true,
-              resolvedAt: new Date().toISOString()
-            }
+            defaultPayload: createDefaultDeniedCapabilityPayload(request)
           }));
       }
 
@@ -3390,8 +5687,25 @@ function AgentRuntimeContent({
     });
   }
 
+  function renderPhaseFallbackSurface(title: string, message: string, tone: "default" | "danger" = "default") {
+    return (
+      <View style={styles.phaseFallbackWrap}>
+        <View style={[styles.phaseFallbackCard, tone === "danger" ? styles.phaseFallbackCardDanger : null]}>
+          <View style={[styles.phaseFallbackBadge, tone === "danger" ? styles.phaseFallbackBadgeDanger : null]}>
+            <Text style={[styles.phaseFallbackBadgeText, tone === "danger" ? styles.phaseFallbackBadgeTextDanger : null]}>
+              {title}
+            </Text>
+          </View>
+          <Text style={styles.phaseFallbackMessage}>{message}</Text>
+        </View>
+      </View>
+    );
+  }
+
   function renderScreenSurface(snapshot: RenderSnapshot) {
     const screenModeCopy = getScreenModeCopy(snapshot.screenMode);
+    const stageBanner = getRuntimeStageBanner(runtime);
+    const stageFacts = createRuntimeStageFacts(runtime);
 
     return (
       <View style={styles.screenFrame}>
@@ -3419,6 +5733,46 @@ function AgentRuntimeContent({
                 </View>
               </View>
               <Text style={styles.title}>{snapshot.screen?.subtitle ?? snapshot.archetypeCopy.note}</Text>
+              {stageBanner ? (
+                <View
+                  style={[
+                    styles.stageBannerCard,
+                    stageBanner.tone === "success" ? styles.stageBannerCardSuccess : null,
+                    stageBanner.tone === "warning" ? styles.stageBannerCardWarning : null,
+                    stageBanner.tone === "danger" ? styles.stageBannerCardDanger : null
+                  ]}
+                >
+                  <Text
+                    style={[
+                      styles.stageBannerLabel,
+                      stageBanner.tone === "success" ? styles.stageBannerLabelSuccess : null,
+                      stageBanner.tone === "warning" ? styles.stageBannerLabelWarning : null,
+                      stageBanner.tone === "danger" ? styles.stageBannerLabelDanger : null
+                    ]}
+                  >
+                    {stageBanner.label}
+                  </Text>
+                  <Text style={styles.stageBannerText}>{stageBanner.message}</Text>
+                  {stageFacts.length > 0 ? (
+                    <View style={styles.stageFactRow}>
+                      {stageFacts.map((fact) => (
+                        <View
+                          key={`${fact.label}-${fact.value}`}
+                          style={[
+                            styles.stageFactChip,
+                            fact.tone === "success" ? styles.stageFactChipSuccess : null,
+                            fact.tone === "warning" ? styles.stageFactChipWarning : null,
+                            fact.tone === "danger" ? styles.stageFactChipDanger : null
+                          ]}
+                        >
+                          <Text style={styles.stageFactLabel}>{fact.label}</Text>
+                          <Text style={styles.stageFactValue}>{fact.value}</Text>
+                        </View>
+                      ))}
+                    </View>
+                  ) : null}
+                </View>
+              ) : null}
               {snapshot.interactionReason && snapshot.screenMode !== "stable" ? (
                 <View style={styles.modeReasonCard}>
                   <Text style={styles.modeReasonLabel}>{screenModeCopy.note}</Text>
@@ -3457,7 +5811,8 @@ function AgentRuntimeContent({
         </View>
         {!snapshot.screen ? (
           <View style={styles.emptyState}>
-            <Text style={styles.statusText}>No screen available.</Text>
+            <Text style={styles.statusText}>{getFallbackScreenTitle(runtime)}</Text>
+            <Text style={styles.emptyStateCaption}>{getFallbackWorkspaceMessage(runtime)}</Text>
           </View>
         ) : (
           <View
@@ -3493,33 +5848,27 @@ function AgentRuntimeContent({
               <View style={styles.blockStack}>
                 {snapshot.resolvedBlocks.map((block) => (
                   <View key={block.id} style={styles.blockRevealWrap}>
-                      <CoreBlock
-                        block={block}
-                        onAction={(action) =>
-                          void sendLockedClientEvent({
-                            type: "action.triggered",
-                            actionId: action.id,
-                            payload: action.payload
-                          })
-                        }
-                        onFormSubmit={(formId, values) =>
-                          formsLocked
-                            ? undefined
-                            : void sendLockedClientEvent({
-                                type: "form.submitted",
-                                formId,
-                                values
-                              })
-                        }
-                        onArtifact={(resource, interactionMode) =>
-                          void handleArtifactRequest(resource, interactionMode)
-                        }
-                        interaction={{
-                          actionsDisabled: actionsLocked,
-                          formsDisabled: formsLocked,
-                          artifactsDisabled: artifactsLocked
-                        }}
-                      />
+                    <CoreBlock
+                      block={block}
+                      onAction={(action) => void handleRendererAction(action)}
+                      onFormSubmit={(formId, values) =>
+                        formsLocked
+                          ? undefined
+                          : void sendLockedClientEvent({
+                              type: "form.submitted",
+                              formId,
+                              values
+                            })
+                      }
+                      onArtifact={(resource, interactionMode) =>
+                        void handleArtifactRequest(resource, interactionMode)
+                      }
+                      interaction={{
+                        actionsDisabled: actionsLocked,
+                        formsDisabled: formsLocked,
+                        artifactsDisabled: artifactsLocked
+                      }}
+                    />
                   </View>
                 ))}
               </View>
@@ -3533,9 +5882,10 @@ function AgentRuntimeContent({
   if (runtime.phase === "connecting") {
     return (
       <View style={styles.screen}>
-        <View style={styles.centered}>
-          <Text style={styles.statusText}>Connecting runtime...</Text>
-        </View>
+        {renderPhaseFallbackSurface(
+          "Connecting",
+          "Establishing the runtime session and waiting for the first workspace surface."
+        )}
         {renderShell({
           disabled: true,
           inputMode: "voice",
@@ -3559,9 +5909,11 @@ function AgentRuntimeContent({
   if (runtime.phase === "error") {
     return (
       <View style={styles.screen}>
-        <View style={styles.centered}>
-          <Text style={styles.errorText}>{runtime.error ?? "Runtime error"}</Text>
-        </View>
+        {renderPhaseFallbackSurface(
+          "Runtime error",
+          runtime.error ?? "The runtime reported an unrecoverable error.",
+          "danger"
+        )}
         {renderShell({
           disabled: true,
           inputMode: "voice",
@@ -3603,7 +5955,7 @@ function AgentRuntimeContent({
             </View>
           <View style={styles.navBarCenter}>
             <Text numberOfLines={1} style={styles.navBarTitle}>
-              {screen?.title ?? "Workspace"}
+              {getFallbackScreenTitle(runtime)}
             </Text>
           </View>
           <View style={[styles.navBarSide, styles.navBarSideEnd]}>
@@ -3611,7 +5963,7 @@ function AgentRuntimeContent({
             <Pressable
               disabled={historyLocked}
               style={[styles.historyButton, historyLocked ? styles.historyButtonDisabled : null]}
-              onPress={() => setHistoryVisible(true)}
+              onPress={() => setHistoryVisibility(true)}
             >
               <Text style={[styles.historyButtonText, historyLocked ? styles.historyButtonTextDisabled : null]}>
                 History
@@ -3662,11 +6014,19 @@ function AgentRuntimeContent({
         history={runtime.history}
         historyEnabled={!historyLocked}
         visible={historyVisible}
-        onClose={() => setHistoryVisible(false)}
+        onClose={() => setHistoryVisibility(false)}
+        onInspectRequest={(target) => openRequestInspector(target)}
+      />
+      <RequestInspectorModal
+        runtime={runtime}
+        visible={requestInspectorState.visible}
+        target={requestInspectorState.target}
+        onClose={closeRequestInspector}
+        onAction={(action) => void handleRendererAction(action)}
       />
     </View>
   );
-}
+});
 
 function DefaultVoiceShell({
   disabled,
@@ -4104,7 +6464,7 @@ function CapabilityRequestModal({ prompt, overridePrompt, onApprove, onDeny }: C
   );
 }
 
-export function AgentRuntimeView({
+export const AgentRuntimeView = forwardRef<AgentRuntimeViewHandle, AgentRuntimeViewProps>(function AgentRuntimeView({
   harness,
   voiceShell,
   artifactHandlers,
@@ -4112,21 +6472,24 @@ export function AgentRuntimeView({
   hostBridge,
   renderVoiceShell,
   transitionHooks,
+  navigationHooks,
   runtimeOptions
-}: AgentRuntimeViewProps) {
+}, ref) {
   return (
     <AgentRuntimeProvider harness={harness} options={runtimeOptions}>
       <AgentRuntimeContent
+        ref={ref}
         voiceShell={voiceShell}
         artifactHandlers={artifactHandlers}
         capabilityHandlers={capabilityHandlers}
         hostBridge={hostBridge}
         renderVoiceShell={renderVoiceShell}
         transitionHooks={transitionHooks}
+        navigationHooks={navigationHooks}
       />
     </AgentRuntimeProvider>
   );
-}
+});
 
 const styles = StyleSheet.create({
   screen: {
@@ -4198,6 +6561,50 @@ const styles = StyleSheet.create({
     justifyContent: "center",
     backgroundColor: "#F6F8FB"
   },
+  phaseFallbackWrap: {
+    flex: 1,
+    paddingHorizontal: 20,
+    paddingTop: 84,
+    backgroundColor: "#F6F8FB"
+  },
+  phaseFallbackCard: {
+    borderRadius: 24,
+    paddingHorizontal: 20,
+    paddingVertical: 18,
+    backgroundColor: "#FFFFFF",
+    borderWidth: 1,
+    borderColor: "#D7DEE9",
+    gap: 12
+  },
+  phaseFallbackCardDanger: {
+    borderColor: "#F1C4C4",
+    backgroundColor: "#FFF7F7"
+  },
+  phaseFallbackBadge: {
+    alignSelf: "flex-start",
+    borderRadius: 999,
+    paddingHorizontal: 10,
+    paddingVertical: 4,
+    backgroundColor: "#E6EEF9"
+  },
+  phaseFallbackBadgeDanger: {
+    backgroundColor: "#FDE2E2"
+  },
+  phaseFallbackBadgeText: {
+    color: "#30517A",
+    fontSize: 11,
+    fontWeight: "700",
+    textTransform: "uppercase",
+    letterSpacing: 0.8
+  },
+  phaseFallbackBadgeTextDanger: {
+    color: "#A63B3B"
+  },
+  phaseFallbackMessage: {
+    color: "#334155",
+    fontSize: 15,
+    lineHeight: 24
+  },
   header: {
     gap: 12
   },
@@ -4265,6 +6672,82 @@ const styles = StyleSheet.create({
     color: "#475569",
     fontSize: 11,
     fontWeight: "600"
+  },
+  stageBannerCard: {
+    marginTop: 2,
+    paddingVertical: 12,
+    paddingHorizontal: 12,
+    borderRadius: 16,
+    backgroundColor: "rgba(236, 244, 255, 0.84)",
+    borderWidth: 1,
+    borderColor: "rgba(10, 132, 255, 0.16)",
+    gap: 8
+  },
+  stageBannerCardSuccess: {
+    backgroundColor: "rgba(237, 252, 242, 0.84)",
+    borderColor: "rgba(34, 197, 94, 0.16)"
+  },
+  stageBannerCardWarning: {
+    backgroundColor: "rgba(255, 248, 233, 0.88)",
+    borderColor: "rgba(245, 158, 11, 0.18)"
+  },
+  stageBannerCardDanger: {
+    backgroundColor: "rgba(255, 241, 242, 0.88)",
+    borderColor: "rgba(239, 68, 68, 0.18)"
+  },
+  stageBannerLabel: {
+    color: "#0A84FF",
+    fontSize: 11,
+    fontWeight: "700",
+    textTransform: "uppercase"
+  },
+  stageBannerLabelSuccess: {
+    color: "#15803D"
+  },
+  stageBannerLabelWarning: {
+    color: "#B45309"
+  },
+  stageBannerLabelDanger: {
+    color: "#B91C1C"
+  },
+  stageBannerText: {
+    color: "#334155",
+    fontSize: 13,
+    lineHeight: 19
+  },
+  stageFactRow: {
+    flexDirection: "row",
+    flexWrap: "wrap",
+    gap: 8
+  },
+  stageFactChip: {
+    flexDirection: "row",
+    alignItems: "center",
+    gap: 6,
+    paddingHorizontal: 10,
+    paddingVertical: 6,
+    borderRadius: 999,
+    backgroundColor: "rgba(255, 255, 255, 0.78)"
+  },
+  stageFactChipSuccess: {
+    backgroundColor: "rgba(240, 253, 244, 0.92)"
+  },
+  stageFactChipWarning: {
+    backgroundColor: "rgba(255, 251, 235, 0.92)"
+  },
+  stageFactChipDanger: {
+    backgroundColor: "rgba(254, 242, 242, 0.92)"
+  },
+  stageFactLabel: {
+    color: "#64748B",
+    fontSize: 10,
+    fontWeight: "700",
+    textTransform: "uppercase"
+  },
+  stageFactValue: {
+    color: "#0F172A",
+    fontSize: 11,
+    fontWeight: "700"
   },
   modeReasonCard: {
     marginTop: 2,
@@ -4444,9 +6927,122 @@ const styles = StyleSheet.create({
   emptyState: {
     paddingVertical: 32
   },
+  emptyStateCaption: {
+    marginTop: 8,
+    color: "#6B7280",
+    fontSize: 13,
+    lineHeight: 20
+  },
   historyScreen: {
     flex: 1,
     backgroundColor: "#F3F6FB"
+  },
+  inspectorScreen: {
+    flex: 1,
+    backgroundColor: "#F3F6FB"
+  },
+  inspectorNavChrome: {
+    paddingTop: 8,
+    paddingHorizontal: 16,
+    paddingBottom: 8,
+    backgroundColor: "#F3F6FB"
+  },
+  inspectorNavBar: {
+    minHeight: 52,
+    flexDirection: "row",
+    alignItems: "center",
+    justifyContent: "space-between",
+    gap: 12
+  },
+  inspectorNavSpacer: {
+    width: 56,
+    height: 1
+  },
+  inspectorNavCenter: {
+    flex: 1,
+    alignItems: "center",
+    justifyContent: "center",
+    gap: 2
+  },
+  inspectorNavTitle: {
+    color: "#0F172A",
+    fontSize: 14,
+    fontWeight: "700"
+  },
+  inspectorNavSubtitle: {
+    color: "#64748B",
+    fontSize: 11,
+    fontWeight: "500"
+  },
+  inspectorCloseButton: {
+    minWidth: 56,
+    minHeight: 36,
+    borderRadius: 999,
+    paddingHorizontal: 12,
+    alignItems: "center",
+    justifyContent: "center",
+    backgroundColor: "#FFFFFF",
+    borderWidth: 1,
+    borderColor: "#D8E3F0"
+  },
+  inspectorCloseButtonText: {
+    color: "#0A84FF",
+    fontSize: 11,
+    fontWeight: "700"
+  },
+  inspectorContent: {
+    padding: 20,
+    gap: 16,
+    paddingBottom: 48
+  },
+  inspectorTargetDock: {
+    borderRadius: 20,
+    borderWidth: 1,
+    borderColor: "#D8E3F0",
+    backgroundColor: "#FFFFFF",
+    padding: 16,
+    gap: 10
+  },
+  inspectorTargetLabel: {
+    color: "#0F172A",
+    fontSize: 12,
+    fontWeight: "700"
+  },
+  inspectorTargetRow: {
+    flexDirection: "row",
+    alignItems: "center",
+    gap: 10
+  },
+  inspectorTargetInput: {
+    flex: 1,
+    minHeight: 44,
+    borderRadius: 14,
+    borderWidth: 1,
+    borderColor: "#D8E3F0",
+    paddingHorizontal: 14,
+    color: "#0F172A",
+    backgroundColor: "#F8FBFF",
+    fontSize: 13,
+    fontWeight: "500"
+  },
+  inspectorTargetButton: {
+    minHeight: 44,
+    borderRadius: 14,
+    paddingHorizontal: 16,
+    alignItems: "center",
+    justifyContent: "center",
+    backgroundColor: "#0A84FF"
+  },
+  inspectorTargetButtonDisabled: {
+    backgroundColor: "#D8E3F0"
+  },
+  inspectorTargetButtonText: {
+    color: "#FFFFFF",
+    fontSize: 12,
+    fontWeight: "700"
+  },
+  inspectorTargetButtonTextDisabled: {
+    color: "#6B7280"
   },
   historyContent: {
     padding: 20,
@@ -4490,6 +7086,16 @@ const styles = StyleSheet.create({
     borderWidth: 1,
     borderColor: "rgba(216, 227, 240, 0.88)",
     gap: 6
+  },
+  historyRequestGroupCardPressable: {
+    shadowColor: "#0F172A",
+    shadowOpacity: 0.04,
+    shadowRadius: 10,
+    shadowOffset: {
+      width: 0,
+      height: 4
+    },
+    elevation: 2
   },
   historyRequestGroupHeader: {
     flexDirection: "row",

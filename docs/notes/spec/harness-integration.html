@@ -106,9 +106,15 @@
             <li>当前请求和最近完成请求的派生快照。</li>
             <li>请求级 metrics：history、workspace、patch、resource、issue。</li>
             <li>Verification board：断言列表、矩阵视图和总 verdict。</li>
-            <li>bridge 调试源：artifact inventory、pending capability queue 和 bridge summary。</li>
+            <li>bridge 调试源：artifact inventory、pending capability queue、bridge summary，再加上 bridge integration、bridge routing、bridge errors、bridge assertions 和 bridge verdict。</li>
             <li>request 级资源查询：当前请求和最近完成请求都能单独拉出 resource summary 和 resource history。</li>
             <li>request 索引：现在还能把所有 request chain 汇总成一份可读索引，不必只盯当前或最近完成那两条。</li>
+            <li>request 索引动作：runtime 现在还能直接派生出一组可点击的 request drill-down actions，不用宿主自己手抄 requestId 再跳转。</li>
+            <li>request 阶段回放时间线：runtime 现在还能把单条 request chain 直接投影成 stage replay timeline，方便看阶段推进顺序。</li>
+            <li>request 阶段摘要：runtime 现在还能给每个阶段补出事件数、资源数、patch 数和 issue 数，便于快速定位哪一段有问题。</li>
+            <li>持久化诊断：现在还能直接看到 runtime 是否从本地快照恢复、最近一次 save/load 状态和错误。</li>
+            <li>传输诊断：现在还能直接看到连接次数、重连次数、最近一次连接时间和连接错误。</li>
+            <li>恢复诊断：现在还能直接得到 restore / reconnect / reset / persistence 的断言列表和总 verdict。</li>
           </ul>
           <div class="note">
             接入方的重点不再是自己造一套 debug UI，而是先把 requestId、screen.mode、screen.flow、screen.patched 这些协议语义发准确。
@@ -116,6 +122,36 @@
           <div class="note">
             另外，这套 request 查询与汇总逻辑现在已经从 <code class="inline">@selfme/unstable-ui-runtime</code> 正式导出成 helper API，
             自定义 renderer 或宿主调试面板可以直接复用 request catalog、request target resolver、resource query 和 summary 逻辑，不用再在各自工程里复制 renderer 内部实现。
+          </div>
+          <div class="note">
+            默认 renderer 现在还额外暴露了一个宿主级 imperative handle。
+            宿主可以通过 <code class="inline">AgentRuntimeViewHandle</code> 直接调用
+            <code class="inline">openHistory()</code>、
+            <code class="inline">openRequestInspector(target)</code> 等方法，
+            不必一定等 harness 先发一个专门的 inspector screen。
+          </div>
+          <div class="note">
+            如果 persistence adapter 实现了 <code class="inline">clear()</code>，
+            宿主现在也可以通过同一个 handle 直接调用 <code class="inline">clearPersistence()</code> 清掉本地 runtime 快照。
+          </div>
+          <div class="note">
+            同一个 handle 现在也支持 <code class="inline">reconnect()</code> 和
+            <code class="inline">resetSession()</code>，可以直接从宿主触发运行时重连或整次会话重置。
+          </div>
+          <div class="note">
+            这两个 overlay 现在也已经并入正式协议。
+            renderer 主动打开或关闭时会发 <code class="inline">navigation.changed</code>，
+            harness 如果要同步状态或反向打开，也可以回发 <code class="inline">navigation.updated</code>。
+          </div>
+          <div class="note">
+            默认 request inspector 现在已经内建显式 <code class="inline">requestId</code> 钻取入口，
+            history 里的 request 分组卡片也可以直接点进 inspector，不必再额外发一整页专门的 inspector screen。
+          </div>
+          <div class="note">
+            如果宿主还需要知道 overlay 当前在看哪条 request，或 history 是否已经展开，
+            现在还可以传 <code class="inline">navigationHooks</code>，其中包含
+            <code class="inline">onRequestInspectorChange</code> 和
+            <code class="inline">onHistoryVisibilityChange</code>。
           </div>
         </section>
 
@@ -130,6 +166,10 @@
             <li>runtime 已经能派生 currentRequest、lastCompletedRequest 和请求级验证指标，调试重点正在从“看零散 event log”转向“看整条 request 链”。</li>
             <li><code class="inline">interaction.history</code> 现在是正式生效的 renderer 控制位，不再只是协议里的摆设字段。</li>
             <li>如果宿主只想接管系统打开、分享或默认 capability resolution，而不想重写更高层 handler，现在可以走 <code class="inline">hostBridge</code>。</li>
+            <li>如果宿主只想补 <code class="inline">openUrl</code>、<code class="inline">share</code> 或简单 capability payload 覆盖，可直接用 <code class="inline">createHostBridge(...)</code>，不用手写完整 <code class="inline">resolveCapability()</code>。</li>
+            <li>如果宿主只是想按资源种类补 preview，可直接用 <code class="inline">createArtifactPreviewHandlers(...)</code>，不用手写整套 handler 结构。</li>
+            <li>如果宿主只是想补 capability prompt 和简单 payload 覆盖，可直接用 <code class="inline">createCapabilityHandlers(...)</code>，不用再手写完整 <code class="inline">resolve()</code>。</li>
+            <li>如果宿主想把 preview override、capability preset 和 host bridge wiring 一次组合好，可直接用 <code class="inline">createHostIntegration(...)</code>。</li>
             <li>如果宿主只想调输入壳文案、默认模式和最近输入行为，可以先走 <code class="inline">voiceShell</code> 配置；只有要完全替换底部输入 UI 时才需要上 <code class="inline">renderVoiceShell</code>。</li>
             <li>它现在更适合 starter integration，而不是完整生产接入套件。</li>
           </ul>

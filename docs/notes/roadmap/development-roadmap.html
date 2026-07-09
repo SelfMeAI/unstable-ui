@@ -46,6 +46,9 @@
             <li>把 screen flow helper 提炼进 harness-sdk，减少接入方手拼 lifecycle 字段。</li>
             <li>把 runtime 的 request-aware history、request metrics 和 Verification board 主干补齐。</li>
             <li>让 timeline 流真正走 <code class="inline">screen.patched</code> 增量更新，验证 patched request 的运行语义。</li>
+            <li>把 renderer 的无 screen / connecting / error / in-flight 阶段态补成统一的框架级状态呈现，不再只剩零散裸文本。</li>
+            <li>把 bridge integration / routing / errors / assertions / verdict 收成正式 runtime source，并开始导出 bridge helper API，减少宿主桥接接入样板代码。</li>
+            <li>把 bridge helper API 再向上收成 <code class="inline">createHostIntegration(...)</code> 统一 builder，减少宿主在 artifact/capability/hostBridge 三层之间来回组装。</li>
           </ul>
         </section>
 

@@ -77,7 +77,11 @@ export const listBlockSchema = z.object({
 export const actionsBlockSchema = z.object({
   id: z.string(),
   type: z.literal("actions"),
-  items: z.array(actionItemSchema)
+  source: z.enum(["runtime.requestIndexActions", "runtime.persistenceActions", "runtime.sessionActions"]).optional(),
+  maxItems: z.number().int().positive().optional(),
+  items: z.array(actionItemSchema).optional()
+}).refine((value) => value.source || value.items?.length, {
+  message: "An actions block requires either source or items."
 });
 
 export const formFieldSchema = z.object({
@@ -107,12 +111,29 @@ export const timelineItemSchema = z.object({
   meta: z.string().optional()
 });
 
+export const requestTargetSchema = z.string().min(1);
+
+export const navigationSurfaceSchema = z.enum(["history", "request-inspector"]);
+
+export const navigationVisibilitySchema = z.enum(["open", "closed"]);
+
+export const navigationChangeSchema = z.object({
+  surface: navigationSurfaceSchema,
+  visibility: navigationVisibilitySchema,
+  requestTarget: requestTargetSchema.optional()
+});
+
 export const timelineBlockSchema = z.object({
   id: z.string(),
   type: z.literal("timeline"),
   title: z.string().optional(),
   description: z.string().optional(),
-  items: z.array(timelineItemSchema).min(1)
+  source: z.enum(["runtime.requestTimeline"]).optional(),
+  requestTarget: requestTargetSchema.optional(),
+  maxItems: z.number().int().positive().optional(),
+  items: z.array(timelineItemSchema).optional()
+}).refine((value) => value.source || value.items?.length, {
+  message: "A timeline block requires either source or items."
 });
 
 export const detailItemSchema = z.object({
@@ -121,8 +142,6 @@ export const detailItemSchema = z.object({
   value: z.string(),
   tone: z.enum(["default", "success", "warning", "danger"]).optional()
 });
-
-export const requestTargetSchema = z.string().min(1);
 
 export const detailsBlockSchema = z.object({
   id: z.string(),
@@ -133,6 +152,17 @@ export const detailsBlockSchema = z.object({
     .enum([
       "runtime.flow",
       "runtime.bridge",
+      "runtime.bridgeIntegration",
+      "runtime.bridgeRouting",
+      "runtime.bridgeErrors",
+      "runtime.bridgeAssertions",
+      "runtime.bridgeVerdict",
+      "runtime.navigation",
+      "runtime.persistence",
+      "runtime.transport",
+      "runtime.recovery",
+      "runtime.recoveryAssertions",
+      "runtime.recoveryVerdict",
       "runtime.requestIndexSummary",
       "runtime.interaction",
       "runtime.session",
@@ -142,6 +172,7 @@ export const detailsBlockSchema = z.object({
       "runtime.requestAssertions",
       "runtime.requestMatrix",
       "runtime.requestVerdict",
+      "runtime.requestStageSummary",
       "runtime.currentRequest",
       "runtime.currentRequestResources",
       "runtime.lastCompletedRequest",
@@ -180,7 +211,11 @@ export const logBlockSchema = z
         "runtime.history",
         "runtime.requestIndex",
         "runtime.requestHistory",
+        "runtime.requestStageLog",
         "runtime.requestResourceHistory",
+        "runtime.transportLog",
+        "runtime.persistenceLog",
+        "runtime.sessionLog",
         "runtime.artifacts",
         "runtime.capabilityHistory",
         "runtime.capabilityRequests",
@@ -368,6 +403,10 @@ export const harnessEventSchema = z.discriminatedUnion("type", [
     request: capabilityRequestSchema
   }),
   z.object({
+    type: z.literal("navigation.updated"),
+    navigation: navigationChangeSchema
+  }),
+  z.object({
     type: z.literal("error"),
     message: z.string()
   }),
@@ -415,6 +454,10 @@ export const clientEventSchema = z.discriminatedUnion("type", [
     type: z.literal("capability.resolved"),
     requestId: z.string(),
     payload: z.record(z.string(), z.unknown()).optional()
+  }),
+  z.object({
+    type: z.literal("navigation.changed"),
+    navigation: navigationChangeSchema
   })
 ]);
 
@@ -422,6 +465,9 @@ export type ActionItem = z.infer<typeof actionItemSchema>;
 export type ArtifactRef = z.infer<typeof artifactRefSchema>;
 export type CapabilityRequest = z.infer<typeof capabilityRequestSchema>;
 export type DetailItem = z.infer<typeof detailItemSchema>;
+export type NavigationChange = z.infer<typeof navigationChangeSchema>;
+export type NavigationSurface = z.infer<typeof navigationSurfaceSchema>;
+export type NavigationVisibility = z.infer<typeof navigationVisibilitySchema>;
 export type RequestTarget = "current" | "lastCompleted" | string;
 export type FormField = z.infer<typeof formFieldSchema>;
 export type FormBlock = z.infer<typeof formBlockSchema>;

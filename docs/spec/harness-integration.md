@@ -86,12 +86,33 @@ The runtime now exposes a verification layer that harness authors can use while 
 - request metrics for history, workspace, patch, resource, and issue counts
 - derived assertions, matrix rows, and a top-level verdict
 - bridge-facing runtime sources for artifact inventory and pending capability queues
+- bridge-facing integration sources for host-registered bridge methods and handler coverage
+- bridge-facing routing sources for effective per-path bridge resolution
+- bridge-facing renderer diagnostics for artifact and capability bridge failures
+- bridge-facing assertion and verdict sources for artifact-inventory and capability-accounting checks
+- persistence-facing runtime sources for hydration, save state, and local-cache diagnostics
+- transport-facing runtime sources for reconnect, disconnect, and connection-attempt diagnostics
+- recovery-facing runtime sources for reset / hydrate / reconnect consistency diagnostics, including assertion rows and a top-level verdict
 - request-scoped resource queries for the active and last completed request chains
 - request index sources that summarize every grouped request chain in the runtime history
+- request index action sources that let hosts jump directly from the catalog into one request chain
+- request stage replay timeline sources that let hosts visualize one request chain as a runtime-derived sequence
+- request stage summary sources that let hosts inspect per-stage event, resource, patch, and issue metrics
 
 These are runtime projections. A harness does not need to emit extra verification events to benefit from them.
 
 The runtime package also exports request query helpers for these projections, so custom renderers or host diagnostics can reuse the same request catalog, request-target resolver, resource query, and summary logic directly from `@selfme/unstable-ui-runtime`.
+
+The default renderer now also exposes a host-level imperative surface through `AgentRuntimeViewHandle`. A host app can open grouped history or a request inspector programmatically with `openHistory()`, `closeHistory()`, `openRequestInspector(target)`, and `closeRequestInspector()`.
+It can also clear the persisted runtime snapshot with `clearPersistence()` when the persistence adapter supports `clear()`, reconnect the harness with `reconnect()`, and fully reset the live runtime with `resetSession()`.
+
+For runtime diagnostics, the built-in renderer now also exposes focused log sources for these lifecycle controls: `runtime.sessionLog`, `runtime.transportLog`, and `runtime.persistenceLog`.
+
+Those overlays now also participate in the protocol. Renderer-initiated history and request-inspector transitions emit `navigation.changed`, and a harness can synchronize or drive the same surfaces with `navigation.updated`.
+
+The built-in request inspector now supports explicit `requestId` drill-down, and the built-in history overlay can jump directly from grouped request rows into that inspector.
+
+If the host also needs overlay-state synchronization, pass `navigationHooks`. The current hooks surface includes `onRequestInspectorChange` and `onHistoryVisibilityChange`.
 
 ## Notes
 
@@ -129,6 +150,10 @@ The default renderer also supports a middle path for input-shell integration:
 There is now also a middle path for host bridge integration:
 
 - pass `hostBridge` when the host app wants to intercept open-url, share, download/open fallback, or default capability resolution behavior without rewriting the higher-level renderer handlers
+- use `createHostBridge(...)` when the host only needs `openUrl`, `share`, or a simple capability payload override without hand-writing full `resolveCapability()` boilerplate
 - keep `artifactHandlers` and `capabilityHandlers` for resource-kind or capability-specific UI and resolution customizations
+- use `createArtifactPreviewHandlers(...)` when the host only needs preview overrides by artifact kind
+- use `createCapabilityHandlers(...)` when the host wants prompt descriptors plus simple payload overrides without hand-writing full `resolve()` functions
+- use `createHostIntegration(...)` when the host wants one builder that combines preview overrides, capability presets, and host bridge wiring into a single integration object
 
 It is intended as a starter integration surface, not yet a full production integration kit.

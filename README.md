@@ -60,6 +60,57 @@ export function AssistantScreen() {
 
 Use the split packages only when you want tighter control over which layer you consume.
 
+The renderer now also exposes a host-level handle when the app needs to open framework surfaces programmatically:
+
+```tsx
+import { useRef } from "react";
+import {
+  AgentRuntimeView,
+  type AgentRuntimeViewHandle
+} from "@selfme/unstable-ui";
+
+export function AssistantScreen() {
+  const runtimeRef = useRef<AgentRuntimeViewHandle>(null);
+
+  return (
+    <AgentRuntimeView
+      ref={runtimeRef}
+      harness={harness}
+    />
+  );
+}
+
+runtimeRef.current?.openRequestInspector("current");
+runtimeRef.current?.openRequestInspector("lastCompleted");
+runtimeRef.current?.openRequestInspector("voice-123");
+runtimeRef.current?.openHistory();
+await runtimeRef.current?.clearPersistence();
+await runtimeRef.current?.reconnect();
+await runtimeRef.current?.resetSession();
+await runtimeRef.current?.resetSession({ clearPersistence: true });
+```
+
+Those built-in overlays now also map to protocol-level navigation events. Renderer-driven opens and closes emit `navigation.changed`, and a harness can drive the same surfaces back through `navigation.updated`.
+
+The built-in request inspector can also drill into an explicit `requestId`, and the built-in history overlay can jump from grouped request rows straight into that inspector.
+
+If the host also needs overlay-state callbacks, pass `navigationHooks`:
+
+```tsx
+<AgentRuntimeView
+  ref={runtimeRef}
+  harness={harness}
+  navigationHooks={{
+    onRequestInspectorChange: ({ current }) => {
+      console.log(current.target, current.resolvedRequestId);
+    },
+    onHistoryVisibilityChange: ({ current }) => {
+      console.log("history visible:", current);
+    }
+  }}
+/>
+```
+
 ## Remote Harness Starter
 
 The harness SDK now includes a first-party HTTP + SSE adapter for the repo's recommended remote shape:
@@ -132,6 +183,11 @@ The `Runtime playground` embeds:
 - `runtime.capabilityRequests`
 - `runtime.capabilityHistory`
 - `runtime.bridge`
+- `runtime.bridgeIntegration`
+- `runtime.bridgeRouting`
+- `runtime.bridgeErrors`
+- `runtime.bridgeAssertions`
+- `runtime.bridgeVerdict`
 - `runtime.requestIndexSummary`
 - `runtime.lastCapabilityResolution`
 - `runtime.currentRequest`
@@ -142,7 +198,12 @@ The `Runtime playground` embeds:
 - `runtime.lastCompletedRequestResources`
 - `runtime.lastCompletedRequestHistory`
 - `runtime.lastCompletedRequestResourceHistory`
+- `runtime.recoveryAssertions`
+- `runtime.recoveryVerdict`
 - generic request-target sources driven by `requestTarget`, including `runtime.request`, `runtime.requestResources`, `runtime.requestHistory`, `runtime.requestResourceHistory`, `runtime.requestAssertions`, `runtime.requestMatrix`, and `runtime.requestVerdict`
+- stage summary surfaces through `runtime.requestStageSummary` and `runtime.requestStageLog`
+- runtime-derived request stage replay timelines through `runtime.requestTimeline`
+- dynamic request drill-down actions through `runtime.requestIndexActions`
 - `runtime.eventLog`
 - runtime flow / interaction / session details
 - resource bridge test blocks
@@ -200,27 +261,23 @@ const resultScreen = createResultScreen(
 The default renderer also accepts artifact handlers so a host app can customize preview, open, share, and download behavior by artifact kind:
 
 ```tsx
-import { AgentRuntimeView, type ArtifactHandlers } from "@selfme/unstable-ui";
+import { AgentRuntimeView, createArtifactPreviewHandlers } from "@selfme/unstable-ui";
 
-const artifactHandlers: ArtifactHandlers = {
-  html: {
-    preview: (artifact) => ({
-      title: artifact.title,
-      description: "Custom host preview for HTML artifacts.",
-      fields: [{ label: "Surface", value: artifact.uri }],
-      openLabel: "Open report"
-    }),
-    share: async (artifact, context) => {
-      console.log(artifact.id);
-      await context.shareWithSystem();
-    }
-  }
-};
+const artifactHandlers = createArtifactPreviewHandlers({
+  html: (artifact) => ({
+    title: artifact.title,
+    description: "Custom host preview for HTML artifacts.",
+    fields: [{ label: "Surface", value: artifact.uri }],
+    openLabel: "Open report"
+  })
+});
 
 export function AssistantScreen() {
   return <AgentRuntimeView harness={harness} artifactHandlers={artifactHandlers} />;
 }
 ```
+
+Use `createArtifactPreviewHandlers(...)` when the host only needs preview overrides. Drop back to a full `ArtifactHandlers` object when you also need custom `open`, `share`, or `download` hooks.
 
 Without a custom handler, the renderer now includes built-in defaults for:
 
@@ -236,62 +293,89 @@ Without a custom handler, the renderer now includes built-in defaults for:
 Capability handlers work the same way for device-bridge requests:
 
 ```tsx
-import { AgentRuntimeView, type CapabilityHandlers } from "@selfme/unstable-ui";
+import { AgentRuntimeView, createCapabilityHandlers } from "@selfme/unstable-ui";
 
-const capabilityHandlers: CapabilityHandlers = {
+const capabilityHandlers = createCapabilityHandlers({
   microphone: {
     describe: () => ({
       title: "Microphone bridge",
       primaryLabel: "Grant access",
       secondaryLabel: "Not now"
     }),
-    resolve: async (_request, granted) => ({
-      payload: {
-        bridge: "host-app",
-        granted
-      }
+    resolvePayload: (_request, granted) => ({
+      bridge: "host-app",
+      granted
     })
   }
-};
+});
 
 export function AssistantScreen() {
   return <AgentRuntimeView harness={harness} capabilityHandlers={capabilityHandlers} />;
 }
 ```
 
+Use `createCapabilityHandlers(...)` when the host wants a prompt descriptor plus a simple payload override without hand-writing the full `resolve()` boilerplate. Return a full `CapabilityHandlers` map if you need complete control of the resolution function.
+
 If you want to intercept system-facing bridge behavior without attaching per-artifact or per-capability handlers, pass `hostBridge`:
 
 ```tsx
-import { AgentRuntimeView, type HostBridge } from "@selfme/unstable-ui";
+import { AgentRuntimeView, createHostBridge } from "@selfme/unstable-ui";
 
-const hostBridge: HostBridge = {
+const hostBridge = createHostBridge({
   openUrl: async (url, context) => {
     console.log(context.reason, url);
   },
   share: async (payload, context) => {
     console.log(context.reason, payload.url ?? payload.message);
   },
-  resolveCapability: async (request, granted, context) => {
-    if (!granted) {
-      return {
-        payload: {
-          bridge: "host-app",
-          granted: false
-        }
-      };
-    }
-
-    return {
-      payload: {
-        ...(context.defaultPayload ?? {}),
-        bridge: "host-app"
-      }
-    };
-  }
-};
+  resolveCapabilityPayload: (request, granted) => ({
+    bridge: "host-app",
+    capability: request.capability,
+    granted
+  })
+});
 
 export function AssistantScreen() {
   return <AgentRuntimeView harness={harness} hostBridge={hostBridge} />;
+}
+```
+
+Use `createHostBridge(...)` when the host only needs to wire `openUrl`, `share`, or a simple capability payload override. Drop back to a raw `HostBridge` object when you need full custom `resolveCapability()` control.
+
+If the host wants one builder that covers all three layers together, use `createHostIntegration(...)`:
+
+```tsx
+import { AgentRuntimeView, createHostIntegration } from "@selfme/unstable-ui";
+
+const hostIntegration = createHostIntegration({
+  artifactPreviews: {
+    html: (artifact) => ({
+      title: artifact.title,
+      description: "Preview override from one integration builder."
+    })
+  },
+  capabilityPresets: {
+    microphone: {
+      describe: {
+        title: "Microphone bridge",
+        primaryLabel: "Grant access",
+        secondaryLabel: "Not now"
+      },
+      resolvePayload: (_request, granted) => ({
+        bridge: "host-app",
+        granted
+      })
+    }
+  },
+  hostBridgePreset: {
+    openUrl: async (url) => {
+      console.log(url);
+    }
+  }
+});
+
+export function AssistantScreen() {
+  return <AgentRuntimeView harness={harness} {...hostIntegration} />;
 }
 ```
 
@@ -614,7 +698,7 @@ export function AssistantScreen() {
 }
 ```
 
-`details` can also be resolved from runtime sources such as `runtime.flow`, `runtime.interaction`, and `runtime.session` when the host app needs a framework-native debug or inspection surface.
+`details` can also be resolved from runtime sources such as `runtime.flow`, `runtime.interaction`, `runtime.session`, `runtime.transport`, `runtime.persistence`, `runtime.recovery`, `runtime.recoveryAssertions`, `runtime.recoveryVerdict`, `runtime.bridge`, `runtime.bridgeIntegration`, `runtime.bridgeRouting`, `runtime.bridgeErrors`, `runtime.bridgeAssertions`, and `runtime.bridgeVerdict` when the host app needs a framework-native debug or inspection surface. `log` blocks can also consume focused runtime diagnostics such as `runtime.sessionLog`, `runtime.transportLog`, and `runtime.persistenceLog`.
 
 ## Development
 

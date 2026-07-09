@@ -325,7 +325,18 @@ These derived views let local and remote harnesses share the same verification m
 
 Additional runtime inspection sources currently exposed to renderer blocks:
 
+- details source `runtime.navigation`
+- details source `runtime.persistence`
+- details source `runtime.transport`
+- details source `runtime.recovery`
+- details source `runtime.recoveryAssertions`
+- details source `runtime.recoveryVerdict`
 - details source `runtime.bridge`
+- details source `runtime.bridgeIntegration`
+- details source `runtime.bridgeRouting`
+- details source `runtime.bridgeErrors`
+- details source `runtime.bridgeAssertions`
+- details source `runtime.bridgeVerdict`
 - details source `runtime.requestIndexSummary`
 - details source `runtime.lastCapabilityResolution`
 - details source `runtime.request`
@@ -333,22 +344,69 @@ Additional runtime inspection sources currently exposed to renderer blocks:
 - details source `runtime.requestAssertions`
 - details source `runtime.requestMatrix`
 - details source `runtime.requestVerdict`
+- details source `runtime.requestStageSummary`
 - details source `runtime.currentRequestResources`
 - details source `runtime.lastCompletedRequestResources`
+- timeline source `runtime.requestTimeline`
 - log source `runtime.requestIndex`
 - log source `runtime.requestHistory`
+- log source `runtime.requestStageLog`
 - log source `runtime.requestResourceHistory`
+- log source `runtime.transportLog`
+- log source `runtime.persistenceLog`
+- log source `runtime.sessionLog`
 - log source `runtime.artifacts`
 - log source `runtime.capabilityHistory`
 - log source `runtime.capabilityRequests`
 - log source `runtime.currentRequestResourceHistory`
 - log source `runtime.lastCompletedRequestResourceHistory`
+- actions source `runtime.requestIndexActions`
+- actions source `runtime.persistenceActions`
+- actions source `runtime.sessionActions`
 
 These are intended for bridge debugging surfaces such as runtime playgrounds and host integration diagnostics.
 
-For the generic request sources above, `details` and `log` blocks may also provide `requestTarget`. The reserved values are `current` and `lastCompleted`; any other non-empty string is treated as an explicit `requestId`.
+The recovery-derived details sources are intended to keep session lifecycle checks inside the same block protocol:
+
+- `runtime.recoveryAssertions`
+  Derived restore / reconnect / reset / persistence checks from the live runtime state.
+
+- `runtime.recoveryVerdict`
+  A top-level verdict summarizing whether recovery, transport, and persistence signals are internally consistent.
+
+The bridge-derived details sources are intended to keep artifact and capability checks inside the same block protocol:
+
+- `runtime.bridgeIntegration`
+  Host-registered bridge methods and handler coverage currently active in the renderer.
+
+- `runtime.bridgeRouting`
+  Effective route selection for representative artifact and capability bridge paths.
+
+- `runtime.bridgeErrors`
+  Renderer-side artifact and capability bridge failures currently held in the host runtime.
+
+- `runtime.bridgeAssertions`
+  Derived artifact-inventory and capability-accounting checks from the live runtime state.
+
+- `runtime.bridgeVerdict`
+  A top-level verdict summarizing whether bridge-facing artifact and capability signals are internally consistent.
+
+For the generic request sources above, `details`, `timeline`, and `log` blocks may also provide `requestTarget`. The reserved values are `current` and `lastCompleted`; any other non-empty string is treated as an explicit `requestId`.
+
+`actions` blocks may also be runtime-derived. The current built-in source is `runtime.requestIndexActions`, which turns the request catalog into drill-down actions that can open a request inspector or other host-defined request view.
+
+`timeline` blocks may also be runtime-derived. The current built-in source is `runtime.requestTimeline`, which projects the selected request chain into a stage-oriented replay timeline using ordinary runtime history.
+
+`details` and `log` blocks may also expose stage metrics. The current built-in sources are `runtime.requestStageSummary` and `runtime.requestStageLog`, which derive stage counts and per-stage metrics from the same request replay projection.
 
 The current runtime package also exports helper APIs for these request-level projections, so consumers can query grouped request chains, resolve `current` or `lastCompleted` request targets, inspect request-scoped resource activity, and reuse summarized request metrics without re-implementing the derivation layer in each renderer.
+
+The protocol now also reserves navigation events for framework-owned overlays:
+
+- client event `navigation.changed`
+- harness event `navigation.updated`
+
+These events currently cover the built-in `history` and `request-inspector` surfaces, including explicit request targets for inspector drill-down.
 
 ## Screen Patch Operations in v0.1
 

@@ -202,13 +202,26 @@
             <li>history 已经开始携带 request 级关联信息，能回看到底是哪一次输入、动作或表单触发了后续页面流。</li>
             <li>runtime 已经补出 currentRequest、lastCompletedRequest 及其对应 history 视图，不再只剩扁平 event log。</li>
             <li>request catalog、request resource query 和 request summary 这层 runtime helper 已正式导出，不再只存在 renderer 私有实现里。</li>
-            <li>runtime 已开始把 artifact inventory、pending capability queue 和 bridge summary 暴露成内建可渲染 source。</li>
+            <li>renderer 已支持 runtime 派生的 actions source，request index 可以直接变成 drill-down 入口，而不是只显示不可点击的日志。</li>
+            <li>renderer 已支持 runtime 派生的 timeline source，request inspector 可以直接展示某条 request chain 的 stage replay 时间线。</li>
+            <li>renderer 已支持 runtime 派生的 stage summary source，request inspector 可以直接查看每个阶段的事件数、资源数、patch 数和 issue 数。</li>
+            <li>renderer 已暴露宿主级 imperative handle，宿主可以不经 harness screen，直接打开 history 或 request inspector overlay。</li>
+            <li>history / request inspector 现在已经进入正式导航事件模型，renderer 会发 <code class="inline">navigation.changed</code>，harness 可回发 <code class="inline">navigation.updated</code> 做同步或反向驱动。</li>
+            <li>history 分组现在可以直接点进 request inspector，inspector 自己也已经内建显式 requestId 钻取入口，开始替代 demo 专用的 inspector page。</li>
+            <li>runtime 已开始把 persistence 状态暴露成内建 source，可直接检查本地恢复、save 次数、最近一次保存时间和错误。</li>
+            <li>runtime 已开始把 transport 状态暴露成内建 source，并补出 reconnect / resetSession 这类正式宿主控制能力。</li>
+            <li>runtime 已开始把 recovery 断言和 recovery verdict 暴露成内建 source，可直接校验 restore / reconnect / reset / persistence 是否一致。</li>
+            <li>runtime 已开始把 artifact inventory、pending capability queue、bridge summary 以及 bridge assertions / verdict 暴露成内建可渲染 source。</li>
+            <li>renderer 已开始导出 bridge 接入 helper，如 <code class="inline">createArtifactPreviewHandlers(...)</code> 和 <code class="inline">createCapabilityHandlers(...)</code>，减少宿主手写样板代码。</li>
+            <li>renderer 现在也开始导出 <code class="inline">createHostBridge(...)</code>，把简单 host bridge 接入从手写对象推进到正式 helper。</li>
+            <li>renderer 现在还开始导出 <code class="inline">createHostIntegration(...)</code>，把 preview handler、capability preset 和 host bridge 组合成一个统一宿主接入对象。</li>
+            <li>renderer 已开始统一承担无 screen、connecting、error 和 in-flight 阶段态呈现，不再完全依赖 harness 自己补过渡说明。</li>
             <li>screen lifecycle、runtime flow controller 和 renderer transition hooks 已进入主干。</li>
             <li>demo 已经开始消费 transition hooks，过渡效果从框架事件驱动，而不是再靠页面内零散动画拼接。</li>
             <li>远端 harness 示例已经和本地 demo 对齐到明确的 request flow 页面阶段。</li>
             <li>harness-sdk 已经开始导出正式的 screen flow helper，减少接入方自己拼 mode / flow / interaction。</li>
             <li>timeline 类流程已经开始真实使用 <code class="inline">screen.patched</code>，而不是只做整屏替换。</li>
-            <li>demo 里已经有 Verification board，可基于请求链、patch 数、artifact 事件和 issue 数做派生校验。</li>
+            <li>demo 里已经有 Verification board，可基于请求链、patch 数、artifact 事件、会话恢复状态和 issue 数做派生校验。</li>
             <li>更完整的 artifact 渲染、真实设备桥接和更成熟的远端接入辅助仍未实现。</li>
           </ul>
         </section>

@@ -1,4 +1,4 @@
-import { createContext, useContext, useEffect, useRef, type ReactNode } from "react";
+import { createContext, useContext, useEffect, useRef, useState, type ReactNode } from "react";
 import { useMachine } from "@xstate/react";
 import { assign, setup } from "xstate";
 import type { HarnessAdapter } from "@selfme/unstable-ui-harness-sdk";
@@ -8,10 +8,12 @@ import {
   type CapabilityRequest,
   type ClientEvent,
   type HarnessEvent,
+  type NavigationChange,
   type ScreenFlow,
   type ScreenInteraction,
   type ScreenMode,
-  type ScreenSchema
+  type ScreenSchema,
+  type TimelineItem
 } from "@selfme/unstable-ui-protocol";
 
 export interface RuntimeContextValue {
@@ -24,10 +26,17 @@ export interface RuntimeContextValue {
   interaction: ScreenInteraction;
   artifacts: ArtifactRef[];
   capabilityRequests: CapabilityRequest[];
+  navigation: RuntimeNavigationState;
+  persistence: RuntimePersistenceState;
+  transport: RuntimeTransportState;
+  recovery: RuntimeRecoveryState;
   error?: string;
   eventLog: RuntimeEventLogEntry[];
   history: RuntimeHistoryEntry[];
   sendClientEvent(event: ClientEvent): Promise<void>;
+  clearPersistence(): Promise<void>;
+  reconnect(): Promise<void>;
+  resetSession(options?: RuntimeSessionResetOptions): Promise<void>;
 }
 
 export interface RuntimeEventLogEntry {
@@ -60,6 +69,7 @@ export interface RuntimeSnapshot {
   screen?: ScreenSchema;
   artifacts: ArtifactRef[];
   capabilityRequests: CapabilityRequest[];
+  navigation?: RuntimeNavigationState;
   error?: string;
   eventLog: RuntimeEventLogEntry[];
   history: RuntimeHistoryEntry[];
@@ -88,6 +98,56 @@ export interface RuntimeRequestFlowState {
   patchEventCount: number;
   resourceEventCount: number;
   issueCount: number;
+}
+
+export interface RuntimeNavigationState {
+  historyVisible: boolean;
+  requestInspector: {
+    visible: boolean;
+    target: RuntimeRequestTarget;
+  };
+}
+
+export interface RuntimePersistenceState {
+  enabled: boolean;
+  canClear: boolean;
+  hydratedFromSnapshot: boolean;
+  loadState: "idle" | "loading" | "ready" | "error";
+  saveState: "idle" | "saving" | "ready" | "error";
+  clearState: "idle" | "clearing" | "ready" | "error";
+  loadCount: number;
+  saveCount: number;
+  clearCount: number;
+  lastHydratedAt?: string;
+  lastSavedAt?: string;
+  lastClearedAt?: string;
+  loadError?: string;
+  saveError?: string;
+  clearError?: string;
+}
+
+export interface RuntimeTransportState {
+  connectState: "idle" | "connecting" | "connected" | "disconnected" | "error";
+  connectCount: number;
+  disconnectCount: number;
+  reconnectCount: number;
+  lastConnectedAt?: string;
+  lastDisconnectedAt?: string;
+  lastConnectError?: string;
+}
+
+export interface RuntimeSessionResetOptions {
+  clearPersistence?: boolean;
+}
+
+export interface RuntimeRecoveryState {
+  mode: "fresh" | "restored" | "reconnected" | "reset";
+  resetCount: number;
+  reconnectCount: number;
+  lastResetAt?: string;
+  lastReconnectAt?: string;
+  lastRecoveryAt?: string;
+  clearedPersistenceOnLastReset: boolean;
 }
 
 export interface RuntimeRequestSummary {
@@ -135,6 +195,40 @@ export interface RuntimeResolvedRequestChain {
   summary: RuntimeRequestSummary;
 }
 
+export type RuntimeRequestTimelineItem = TimelineItem;
+export interface RuntimeRequestTimelineStageSummary {
+  key: string;
+  title: string;
+  status: RuntimeRequestTimelineItem["status"];
+  eventCount: number;
+  resourceCount: number;
+  patchCount: number;
+  issueCount: number;
+  startedAt?: string;
+  endedAt?: string;
+  latestScreenMode?: ScreenMode;
+  latestTitle?: string;
+  description?: string;
+  meta?: string;
+}
+type RuntimeRequestTimelineStageKey =
+  | "input"
+  | "action"
+  | "form"
+  | "processing"
+  | "task"
+  | "approval"
+  | "artifact"
+  | "result"
+  | "issue"
+  | "completion"
+  | "workspace";
+
+interface RuntimeRequestTimelineStage {
+  key: RuntimeRequestTimelineStageKey;
+  entries: RuntimeHistoryEntry[];
+}
+
 interface RuntimeMachineContext {
   sessionId?: string;
   status: RuntimeContextValue["status"];
@@ -145,6 +239,7 @@ interface RuntimeMachineContext {
   lastCompletedRequestId?: string;
   artifacts: ArtifactRef[];
   capabilityRequests: CapabilityRequest[];
+  navigation: RuntimeNavigationState;
   error?: string;
   eventLog: RuntimeEventLogEntry[];
   history: RuntimeHistoryEntry[];
@@ -156,6 +251,7 @@ type RuntimeMachineEvent =
   | { type: "runtime.hydrated"; snapshot: RuntimeSnapshot }
   | { type: "runtime.error"; message: string }
   | { type: "runtime.disconnected" }
+  | { type: "runtime.reset" }
   | { type: "runtime.client"; event: ClientEvent }
   | { type: "runtime.harness"; event: HarnessEvent };
 
@@ -168,6 +264,48 @@ const defaultScreenInteraction: ScreenInteraction = {
   artifacts: "enabled",
   history: "enabled"
 };
+
+function createDefaultRuntimeNavigationState(): RuntimeNavigationState {
+  return {
+    historyVisible: false,
+    requestInspector: {
+      visible: false,
+      target: "current"
+    }
+  };
+}
+
+function createDefaultRuntimePersistenceState(enabled: boolean): RuntimePersistenceState {
+  return {
+    enabled,
+    canClear: false,
+    hydratedFromSnapshot: false,
+    loadState: enabled ? "loading" : "idle",
+    saveState: enabled ? "idle" : "idle",
+    clearState: "idle",
+    loadCount: 0,
+    saveCount: 0,
+    clearCount: 0
+  };
+}
+
+function createDefaultRuntimeTransportState(): RuntimeTransportState {
+  return {
+    connectState: "idle",
+    connectCount: 0,
+    disconnectCount: 0,
+    reconnectCount: 0
+  };
+}
+
+function createDefaultRuntimeRecoveryState(): RuntimeRecoveryState {
+  return {
+    mode: "fresh",
+    resetCount: 0,
+    reconnectCount: 0,
+    clearedPersistenceOnLastReset: false
+  };
+}
 
 function resolveScreenInteraction(interaction?: ScreenSchema["interaction"]): ScreenInteraction {
   return {
@@ -201,6 +339,40 @@ function getClientEventRequestId(event: ClientEvent) {
     default:
       return undefined;
   }
+}
+
+function normalizeRuntimeRequestTarget(target?: string): RuntimeRequestTarget {
+  return target || "current";
+}
+
+function reduceRuntimeNavigation(
+  navigation: RuntimeNavigationState,
+  change: NavigationChange
+): RuntimeNavigationState {
+  if (change.surface === "history") {
+    const historyVisible = change.visibility === "open";
+
+    return {
+      historyVisible,
+      requestInspector: historyVisible
+        ? {
+            ...navigation.requestInspector,
+            visible: false
+          }
+        : navigation.requestInspector
+    };
+  }
+
+  return {
+    historyVisible: change.visibility === "open" ? false : navigation.historyVisible,
+    requestInspector: {
+      visible: change.visibility === "open",
+      target:
+        change.requestTarget === undefined
+          ? navigation.requestInspector.target
+          : normalizeRuntimeRequestTarget(change.requestTarget)
+    }
+  };
 }
 
 function createClientRequestId(source: RuntimeRequestSource) {
@@ -439,9 +611,21 @@ function buildRuntimeSnapshot(context: RuntimeMachineContext): RuntimeSnapshot {
     screen: context.screen,
     artifacts: context.artifacts,
     capabilityRequests: context.capabilityRequests,
+    navigation: context.navigation,
     error: context.error,
     eventLog: context.eventLog,
     history: context.history
+  };
+}
+
+function createEmptyRuntimeMachineContext(): RuntimeMachineContext {
+  return {
+    status: "idle",
+    artifacts: [],
+    capabilityRequests: [],
+    navigation: createDefaultRuntimeNavigationState(),
+    history: [],
+    eventLog: []
   };
 }
 
@@ -651,6 +835,233 @@ export function resolveRuntimeRequestChain(
   };
 }
 
+function getRuntimeTimelineStageKey(entry: RuntimeHistoryEntry): RuntimeRequestTimelineStageKey {
+  if (entry.kind === "error" || entry.screenMode === "error") {
+    return "issue";
+  }
+
+  if (entry.kind === "artifact") {
+    return "artifact";
+  }
+
+  if (entry.kind === "capability" || entry.screenMode === "approval") {
+    return "approval";
+  }
+
+  if (entry.kind === "form") {
+    return "form";
+  }
+
+  if (entry.kind === "action") {
+    return "action";
+  }
+
+  if (entry.kind === "input") {
+    return "input";
+  }
+
+  if (entry.kind === "session") {
+    return "completion";
+  }
+
+  switch (entry.screenMode) {
+    case "processing":
+      return "processing";
+    case "task":
+      return "task";
+    case "result":
+      return "result";
+    default:
+      return "workspace";
+  }
+}
+
+function getRuntimeTimelineStatus(
+  stage: RuntimeRequestTimelineStage,
+  index: number,
+  stages: RuntimeRequestTimelineStage[],
+  summary: RuntimeRequestSummary
+): RuntimeRequestTimelineItem["status"] {
+  if (stage.key === "issue") {
+    return "error";
+  }
+
+  const isLastEntry = index === stages.length - 1;
+
+  if (isLastEntry && !summary.hasResultScreen && !summary.hasError) {
+    return "active";
+  }
+
+  return "complete";
+}
+
+function getRuntimeTimelineTitle(stage: RuntimeRequestTimelineStage) {
+  switch (stage.key) {
+    case "input":
+      return "Input received";
+    case "action":
+      return "Action dispatched";
+    case "form":
+      return "Form submitted";
+    case "processing":
+      return "Processing";
+    case "task":
+      return "Task workspace";
+    case "approval":
+      return "Capability approval";
+    case "artifact":
+      return "Artifact handoff";
+    case "result":
+      return "Result released";
+    case "issue":
+      return "Issue raised";
+    case "completion":
+      return "Completion";
+    case "workspace":
+    default:
+      return "Workspace update";
+  }
+}
+
+function getRuntimeTimelineDescription(stage: RuntimeRequestTimelineStage) {
+  const latestEntry = stage.entries[stage.entries.length - 1];
+
+  if (!latestEntry) {
+    return undefined;
+  }
+
+  if (stage.key === "artifact") {
+    const titles = stage.entries.map((entry) => entry.title).filter(Boolean);
+    return titles.length > 1 ? `${titles[0]} and ${titles.length - 1} more artifact event(s)` : titles[0];
+  }
+
+  if (stage.key === "approval") {
+    const reasons = stage.entries.map((entry) => entry.body).filter(Boolean);
+    return reasons[reasons.length - 1] ?? latestEntry.title;
+  }
+
+  if (stage.key === "issue") {
+    return latestEntry.body ?? latestEntry.title;
+  }
+
+  const bodies = stage.entries.map((entry) => entry.body).filter(Boolean);
+
+  if (bodies.length > 0) {
+    return bodies[bodies.length - 1];
+  }
+
+  const titles = [...new Set(stage.entries.map((entry) => entry.title).filter(Boolean))];
+
+  if (titles.length > 1) {
+    return titles.slice(0, 3).join(" -> ");
+  }
+
+  if (latestEntry.screenMode) {
+    return `Screen mode: ${latestEntry.screenMode}`;
+  }
+
+  return latestEntry.meta;
+}
+
+function getRuntimeTimelineMeta(stage: RuntimeRequestTimelineStage) {
+  const firstEntry = stage.entries[0];
+  const latestEntry = stage.entries[stage.entries.length - 1];
+
+  if (!firstEntry || !latestEntry) {
+    return undefined;
+  }
+
+  const firstTime = firstEntry.timestamp.slice(11, 19);
+  const latestTime = latestEntry.timestamp.slice(11, 19);
+  const parts = [firstTime === latestTime ? firstTime : `${firstTime} -> ${latestTime}`];
+
+  if (latestEntry.screenMode) {
+    parts.push(latestEntry.screenMode);
+  }
+
+  if (latestEntry.requestSource) {
+    parts.push(latestEntry.requestSource);
+  }
+
+  parts.push(`${stage.entries.length} event${stage.entries.length === 1 ? "" : "s"}`);
+
+  return parts.join(" · ");
+}
+
+function getRuntimeRequestTimelineStages(entries: RuntimeHistoryEntry[]) {
+  const stages: RuntimeRequestTimelineStage[] = [];
+
+  for (const entry of entries) {
+    const key = getRuntimeTimelineStageKey(entry);
+    const previous = stages[stages.length - 1];
+
+    if (previous && previous.key === key) {
+      previous.entries.push(entry);
+      continue;
+    }
+
+    stages.push({
+      key,
+      entries: [entry]
+    });
+  }
+
+  return stages;
+}
+
+export function getRuntimeRequestTimelineItems(
+  entries: RuntimeHistoryEntry[],
+  fallbackRequestId?: string,
+  maxItems?: number
+): RuntimeRequestTimelineItem[] {
+  const stages = getRuntimeRequestTimelineStages(entries);
+  const visibleStages =
+    typeof maxItems === "number" && maxItems > 0 ? stages.slice(-maxItems) : stages;
+  const flattenedEntries = visibleStages.flatMap((stage) => stage.entries);
+  const summary = summarizeRuntimeRequestEntries(flattenedEntries, fallbackRequestId);
+
+  return visibleStages.map((stage, index) => ({
+    id: `${stage.key}-${stage.entries[0]?.id ?? index}`,
+    title: getRuntimeTimelineTitle(stage),
+    description: getRuntimeTimelineDescription(stage),
+    status: getRuntimeTimelineStatus(stage, index, visibleStages, summary),
+    meta: getRuntimeTimelineMeta(stage)
+  }));
+}
+
+export function getRuntimeRequestTimelineStageSummaries(
+  entries: RuntimeHistoryEntry[],
+  fallbackRequestId?: string,
+  maxItems?: number
+): RuntimeRequestTimelineStageSummary[] {
+  const stages = getRuntimeRequestTimelineStages(entries);
+  const visibleStages =
+    typeof maxItems === "number" && maxItems > 0 ? stages.slice(-maxItems) : stages;
+  const flattenedEntries = visibleStages.flatMap((stage) => stage.entries);
+  const summary = summarizeRuntimeRequestEntries(flattenedEntries, fallbackRequestId);
+
+  return visibleStages.map((stage, index) => {
+    const latestEntry = stage.entries[stage.entries.length - 1];
+    const firstEntry = stage.entries[0];
+
+    return {
+      key: stage.key,
+      title: getRuntimeTimelineTitle(stage),
+      status: getRuntimeTimelineStatus(stage, index, visibleStages, summary),
+      eventCount: stage.entries.length,
+      resourceCount: stage.entries.filter((entry) => entry.kind === "artifact" || entry.kind === "capability").length,
+      patchCount: stage.entries.filter((entry) => entry.eventType === "screen.patched").length,
+      issueCount: stage.entries.filter((entry) => entry.kind === "error").length,
+      startedAt: firstEntry?.timestamp,
+      endedAt: latestEntry?.timestamp,
+      latestScreenMode: latestEntry?.screenMode,
+      latestTitle: latestEntry?.title,
+      description: getRuntimeTimelineDescription(stage),
+      meta: getRuntimeTimelineMeta(stage)
+    };
+  });
+}
+
 function appendRuntimeHistory(
   history: RuntimeHistoryEntry[],
   entry: RuntimeHistoryEntry | null,
@@ -750,6 +1161,15 @@ function createHistoryEntryFromClientEvent(
         requestSource,
         eventType: event.type
       });
+    case "navigation.changed":
+      return createRuntimeHistoryEntry("system", "session", "Navigation changed", {
+        body:
+          event.navigation.surface === "request-inspector"
+            ? normalizeRuntimeRequestTarget(event.navigation.requestTarget)
+            : undefined,
+        meta: `${event.navigation.surface}:${event.navigation.visibility}`,
+        eventType: event.type
+      });
   }
 }
 
@@ -822,6 +1242,15 @@ function createHistoryEntryFromHarnessEvent(
         requestSource: context?.activeRequestSource,
         eventType: event.type
       });
+    case "navigation.updated":
+      return createRuntimeHistoryEntry("system", "session", "Navigation synced", {
+        body:
+          event.navigation.surface === "request-inspector"
+            ? normalizeRuntimeRequestTarget(event.navigation.requestTarget)
+            : undefined,
+        meta: `${event.navigation.surface}:${event.navigation.visibility}`,
+        eventType: event.type
+      });
     case "error":
       return createRuntimeHistoryEntry("assistant", "error", "Harness error", {
         body: event.message,
@@ -887,7 +1316,13 @@ const runtimeMachine = setup({
   },
   actions: {
     prepareConnect: assign({
-      error: () => undefined
+      error: () => undefined,
+      eventLog: ({ context }) =>
+        appendRuntimeLog(
+          context.eventLog,
+          createRuntimeLogEntry("runtime", "runtime.connect", {}),
+          defaultEventLogLimit
+        )
     }),
     hydrateSnapshot: assign(({ context, event }) => {
       if (event.type !== "runtime.hydrated") {
@@ -899,6 +1334,7 @@ const runtimeMachine = setup({
         ...event.snapshot,
         artifacts: event.snapshot.artifacts ?? context.artifacts,
         capabilityRequests: event.snapshot.capabilityRequests ?? context.capabilityRequests,
+        navigation: event.snapshot.navigation ?? context.navigation,
         history: event.snapshot.history ?? context.history,
         eventLog: createHydratedEventLog(
           {
@@ -919,6 +1355,20 @@ const runtimeMachine = setup({
         eventLog: appendRuntimeLog(
           context.eventLog,
           createRuntimeLogEntry("runtime", event.type, {}),
+          defaultEventLogLimit
+        )
+      };
+    }),
+    resetRuntimeState: assign(({ context, event }) => {
+      if (event.type !== "runtime.reset") {
+        return context;
+      }
+
+      return {
+        ...createEmptyRuntimeMachineContext(),
+        eventLog: appendRuntimeLog(
+          [],
+          createRuntimeLogEntry("runtime", "runtime.reset", {}),
           defaultEventLogLimit
         )
       };
@@ -973,6 +1423,10 @@ const runtimeMachine = setup({
         activeRequestId: requestId ?? context.activeRequestId,
         activeRequestSource: requestSource ?? context.activeRequestSource,
         capabilityRequests: nextCapabilityRequests,
+        navigation:
+          clientEvent.type === "navigation.changed"
+            ? reduceRuntimeNavigation(context.navigation, clientEvent.navigation)
+            : context.navigation,
         history: appendRuntimeHistory(
           context.history,
           createHistoryEntryFromClientEvent(clientEvent, context),
@@ -1011,6 +1465,7 @@ const runtimeMachine = setup({
             pendingRequestId: undefined,
             activeRequestId: undefined,
             activeRequestSource: undefined,
+            navigation: createDefaultRuntimeNavigationState(),
             history: nextHistory,
             eventLog: nextEventLog
           };
@@ -1052,6 +1507,14 @@ const runtimeMachine = setup({
             artifacts: context.artifacts.some((artifact) => artifact.id === harnessEvent.artifact.id)
               ? context.artifacts
               : [...context.artifacts, harnessEvent.artifact],
+            error: undefined,
+            history: nextHistory,
+            eventLog: nextEventLog
+          };
+        case "navigation.updated":
+          return {
+            ...context,
+            navigation: reduceRuntimeNavigation(context.navigation, harnessEvent.navigation),
             error: undefined,
             history: nextHistory,
             eventLog: nextEventLog
@@ -1100,6 +1563,7 @@ const runtimeMachine = setup({
     status: "idle",
     artifacts: [],
     capabilityRequests: [],
+    navigation: createDefaultRuntimeNavigationState(),
     history: [],
     eventLog: []
   },
@@ -1108,6 +1572,9 @@ const runtimeMachine = setup({
       on: {
         "runtime.hydrated": {
           actions: "hydrateSnapshot"
+        },
+        "runtime.reset": {
+          actions: "resetRuntimeState"
         },
         "runtime.error": {
           target: "error",
@@ -1121,6 +1588,10 @@ const runtimeMachine = setup({
     },
     connecting: {
       on: {
+        "runtime.reset": {
+          target: "idle",
+          actions: "resetRuntimeState"
+        },
         "runtime.connected": {
           target: "active",
           actions: "recordRuntimeLifecycle"
@@ -1137,6 +1608,10 @@ const runtimeMachine = setup({
     },
     active: {
       on: {
+        "runtime.reset": {
+          target: "idle",
+          actions: "resetRuntimeState"
+        },
         "runtime.client": {
           actions: "recordClientEvent",
           target: "active"
@@ -1161,6 +1636,10 @@ const runtimeMachine = setup({
     },
     completed: {
       on: {
+        "runtime.reset": {
+          target: "idle",
+          actions: "resetRuntimeState"
+        },
         "runtime.connect": {
           target: "connecting",
           actions: "prepareConnect"
@@ -1173,6 +1652,10 @@ const runtimeMachine = setup({
     },
     error: {
       on: {
+        "runtime.reset": {
+          target: "idle",
+          actions: "resetRuntimeState"
+        },
         "runtime.connect": {
           target: "connecting",
           actions: "prepareConnect"
@@ -1197,7 +1680,26 @@ export interface AgentRuntimeProviderProps {
 export function AgentRuntimeProvider({ harness, children, options }: AgentRuntimeProviderProps) {
   const [state, send] = useMachine(runtimeMachine);
   const persistenceLoadedRef = useRef(false);
+  const saveOperationRef = useRef(0);
+  const clearOperationRef = useRef(0);
+  const [connectionEpoch, setConnectionEpoch] = useState(0);
   const persistence = options?.persistence;
+  const [persistenceState, setPersistenceState] = useState<RuntimePersistenceState>(
+    createDefaultRuntimePersistenceState(Boolean(persistence))
+  );
+  const [transportState, setTransportState] = useState<RuntimeTransportState>(
+    createDefaultRuntimeTransportState()
+  );
+  const [recoveryState, setRecoveryState] = useState<RuntimeRecoveryState>(
+    createDefaultRuntimeRecoveryState()
+  );
+
+  useEffect(() => {
+    persistenceLoadedRef.current = false;
+    setPersistenceState(createDefaultRuntimePersistenceState(Boolean(persistence)));
+    setTransportState(createDefaultRuntimeTransportState());
+    setRecoveryState(createDefaultRuntimeRecoveryState());
+  }, [persistence]);
 
   useEffect(() => {
     let active = true;
@@ -1205,6 +1707,17 @@ export function AgentRuntimeProvider({ harness, children, options }: AgentRuntim
 
     void (async () => {
       try {
+        if (persistence) {
+          setPersistenceState((current) => ({
+            ...current,
+            enabled: true,
+            canClear: typeof persistence.clear === "function",
+            loadState: "loading",
+            loadError: undefined,
+            clearError: undefined
+          }));
+        }
+
         const snapshot = await Promise.resolve(persistence?.load?.());
 
         if (!active) {
@@ -1214,8 +1727,36 @@ export function AgentRuntimeProvider({ harness, children, options }: AgentRuntim
         if (snapshot) {
           send({ type: "runtime.hydrated", snapshot });
         }
+
+        if (snapshot) {
+          const recoveredAt = new Date().toISOString();
+          setRecoveryState((current) => ({
+            ...current,
+            mode: "restored",
+            lastRecoveryAt: recoveredAt
+          }));
+        }
+
+        setPersistenceState((current) => ({
+          ...current,
+          enabled: Boolean(persistence),
+          canClear: typeof persistence?.clear === "function",
+          hydratedFromSnapshot: Boolean(snapshot),
+          loadState: persistence ? "ready" : current.loadState,
+          loadCount: persistence ? current.loadCount + 1 : current.loadCount,
+          lastHydratedAt: snapshot ? new Date().toISOString() : current.lastHydratedAt,
+          loadError: undefined
+        }));
       } catch (error) {
         if (active) {
+          setPersistenceState((current) => ({
+            ...current,
+            enabled: Boolean(persistence),
+            canClear: typeof persistence?.clear === "function",
+            loadState: "error",
+            loadCount: persistence ? current.loadCount + 1 : current.loadCount,
+            loadError: error instanceof Error ? error.message : "Failed to load runtime snapshot"
+          }));
           send({
             type: "runtime.error",
             message: error instanceof Error ? error.message : "Failed to load runtime snapshot"
@@ -1233,6 +1774,13 @@ export function AgentRuntimeProvider({ harness, children, options }: AgentRuntim
         return;
       }
 
+      setTransportState((current) => ({
+        ...current,
+        connectState: "connecting",
+        connectCount: current.connectCount + 1,
+        lastConnectError: undefined
+      }));
+
       send({ type: "runtime.connect" });
       unsubscribe = harness.subscribe((event) => {
         if (!active) {
@@ -1249,12 +1797,23 @@ export function AgentRuntimeProvider({ harness, children, options }: AgentRuntim
           return;
         }
 
+        setTransportState((current) => ({
+          ...current,
+          connectState: "connected",
+          lastConnectedAt: new Date().toISOString(),
+          lastConnectError: undefined
+        }));
         send({ type: "runtime.connected" });
       } catch (error) {
         if (!active) {
           return;
         }
 
+        setTransportState((current) => ({
+          ...current,
+          connectState: "error",
+          lastConnectError: error instanceof Error ? error.message : "Failed to connect harness"
+        }));
         send({
           type: "runtime.error",
           message: error instanceof Error ? error.message : "Failed to connect harness"
@@ -1268,15 +1827,142 @@ export function AgentRuntimeProvider({ harness, children, options }: AgentRuntim
       void harness.disconnect();
       send({ type: "runtime.disconnected" });
     };
-  }, [harness, persistence, send]);
+  }, [connectionEpoch, harness, persistence, send]);
 
   useEffect(() => {
     if (!persistence || !persistenceLoadedRef.current) {
       return;
     }
 
-    void persistence.save(buildRuntimeSnapshot(state.context));
+    const operationId = saveOperationRef.current + 1;
+    saveOperationRef.current = operationId;
+
+    setPersistenceState((current) => ({
+      ...current,
+      enabled: true,
+      saveState: "saving",
+      saveError: undefined
+    }));
+
+    void Promise.resolve(persistence.save(buildRuntimeSnapshot(state.context)))
+      .then(() => {
+        if (saveOperationRef.current !== operationId) {
+          return;
+        }
+
+        setPersistenceState((current) => ({
+          ...current,
+          saveState: "ready",
+          saveCount: current.saveCount + 1,
+          lastSavedAt: new Date().toISOString(),
+          saveError: undefined
+        }));
+      })
+      .catch((error) => {
+        if (saveOperationRef.current !== operationId) {
+          return;
+        }
+
+        setPersistenceState((current) => ({
+          ...current,
+          saveState: "error",
+          saveError: error instanceof Error ? error.message : "Failed to save runtime snapshot"
+        }));
+      });
   }, [persistence, state.context]);
+
+  async function clearPersistence() {
+    if (!persistence) {
+      return;
+    }
+
+    if (typeof persistence.clear !== "function") {
+      setPersistenceState((current) => ({
+        ...current,
+        enabled: true,
+        canClear: false,
+        clearState: "error",
+        clearError: "Persistence adapter does not implement clear()."
+      }));
+      return;
+    }
+
+    const operationId = clearOperationRef.current + 1;
+    clearOperationRef.current = operationId;
+
+    setPersistenceState((current) => ({
+      ...current,
+      enabled: true,
+      canClear: true,
+      clearState: "clearing",
+      clearError: undefined
+    }));
+
+    try {
+      await Promise.resolve(persistence.clear());
+
+      if (clearOperationRef.current !== operationId) {
+        return;
+      }
+
+      setPersistenceState((current) => ({
+        ...current,
+        hydratedFromSnapshot: false,
+        clearState: "ready",
+        clearCount: current.clearCount + 1,
+        lastClearedAt: new Date().toISOString(),
+        clearError: undefined
+      }));
+    } catch (error) {
+      if (clearOperationRef.current !== operationId) {
+        return;
+      }
+
+      setPersistenceState((current) => ({
+        ...current,
+        clearState: "error",
+        clearError: error instanceof Error ? error.message : "Failed to clear runtime snapshot"
+      }));
+    }
+  }
+
+  async function reconnect() {
+    const reconnectedAt = new Date().toISOString();
+    setTransportState((current) => ({
+      ...current,
+      connectState: "disconnected",
+      disconnectCount: current.disconnectCount + 1,
+      lastDisconnectedAt: new Date().toISOString(),
+      reconnectCount: current.reconnectCount + 1
+    }));
+    setRecoveryState((current) => ({
+      ...current,
+      mode: current.mode === "reset" ? "reset" : "reconnected",
+      reconnectCount: current.reconnectCount + 1,
+      lastReconnectAt: reconnectedAt,
+      lastRecoveryAt: reconnectedAt
+    }));
+    setConnectionEpoch((current) => current + 1);
+  }
+
+  async function resetSession(options?: RuntimeSessionResetOptions) {
+    const resetAt = new Date().toISOString();
+
+    if (options?.clearPersistence) {
+      await clearPersistence();
+    }
+
+    setRecoveryState((current) => ({
+      ...current,
+      mode: "reset",
+      resetCount: current.resetCount + 1,
+      lastResetAt: resetAt,
+      lastRecoveryAt: resetAt,
+      clearedPersistenceOnLastReset: Boolean(options?.clearPersistence)
+    }));
+    send({ type: "runtime.reset" });
+    await reconnect();
+  }
 
   const flow = deriveRuntimeFlowState(state.context, state.context.capabilityRequests);
 
@@ -1300,6 +1986,10 @@ export function AgentRuntimeProvider({ harness, children, options }: AgentRuntim
     ),
     artifacts: state.context.artifacts,
     capabilityRequests: state.context.capabilityRequests,
+    navigation: state.context.navigation,
+    persistence: persistenceState,
+    transport: transportState,
+    recovery: recoveryState,
     error: state.context.error,
     history: state.context.history,
     eventLog: state.context.eventLog,
@@ -1317,7 +2007,10 @@ export function AgentRuntimeProvider({ harness, children, options }: AgentRuntim
         });
         throw error;
       }
-    }
+    },
+    clearPersistence,
+    reconnect,
+    resetSession
   };
 
   return <RuntimeContext.Provider value={value}>{children}</RuntimeContext.Provider>;
