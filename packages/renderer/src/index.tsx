@@ -801,11 +801,12 @@ export interface RendererTransitionSnapshot {
   requestId?: string;
   flowPhase: RuntimeContextValue["flow"]["phase"];
   flowTransition?: ScreenFlowTransition;
+  lifecycleRole: RuntimeContextValue["flow"]["lifecycle"]["role"];
   interactionReason?: string;
   interactionLocked: RendererInteractionLockSnapshot;
 }
 
-export type RendererTransitionChange = "screen" | "mode" | "flow" | "lock";
+export type RendererTransitionChange = "screen" | "mode" | "flow" | "lifecycle" | "lock";
 
 export interface RendererScreenTransitionEvent {
   changed: RendererTransitionChange[];
@@ -814,8 +815,8 @@ export interface RendererScreenTransitionEvent {
 }
 
 export interface RendererFlowChangeEvent {
-  previous: Pick<RendererTransitionSnapshot, "screenId" | "mode" | "requestId" | "flowPhase" | "flowTransition">;
-  current: Pick<RendererTransitionSnapshot, "screenId" | "mode" | "requestId" | "flowPhase" | "flowTransition">;
+  previous: Pick<RendererTransitionSnapshot, "screenId" | "mode" | "requestId" | "flowPhase" | "flowTransition" | "lifecycleRole">;
+  current: Pick<RendererTransitionSnapshot, "screenId" | "mode" | "requestId" | "flowPhase" | "flowTransition" | "lifecycleRole">;
 }
 
 export interface RendererInteractionLockChangeEvent {
@@ -888,8 +889,9 @@ interface HistoryRequestGroup {
 
 type RequestChainSummary = RuntimeRequestSummary;
 
-type RequestFlowProfile = "direct" | "staged" | "patched" | "approval" | "form" | "unknown";
-type RequestVerdict = "pass" | "needs-review" | "idle";
+type RequestFlowProfile = "direct" | "staged" | "patched" | "approval" | "form" | "failed" | "unknown";
+type RequestVerdict = "pass" | "failed" | "needs-review" | "idle";
+type RequestEvaluationMode = "current" | "completed" | "failed";
 type RecoveryVerdict = "pass" | "needs-review";
 type BridgeVerdict = "pass" | "needs-review";
 type RuntimeDerivedRequestSource =
@@ -1523,6 +1525,14 @@ function resolveNavigationChangeFromAction(action: ActionItem): NavigationChange
     };
   }
 
+  if (action.id === "inspect-last-failed-request") {
+    return {
+      surface: "request-inspector",
+      visibility: "open",
+      requestTarget: "lastFailed"
+    };
+  }
+
   if (action.id === "close-request-inspector") {
     return {
       surface: "request-inspector",
@@ -1568,6 +1578,7 @@ function buildRequestInspectorBlocks(requestTarget: RequestTarget): Block[] {
       items: [
         { id: "inspect-current-request", label: "Inspect current" },
         { id: "inspect-last-completed-request", label: "Inspect last completed" },
+        { id: "inspect-last-failed-request", label: "Inspect last failed" },
         { id: "close-request-inspector", label: "Close" }
       ]
     },
@@ -1728,8 +1739,12 @@ function resolveRequestEvaluationMode(
   source: RuntimeDerivedRequestSource,
   requestTarget: RequestTarget | undefined,
   summary: RequestChainSummary
-): "current" | "completed" {
+): RequestEvaluationMode {
   const resolvedTarget = resolveRequestTarget(source, requestTarget);
+
+  if (resolvedTarget === "lastFailed" || summary.requestId === runtime.flow.lastFailedRequestId || summary.hasError) {
+    return "failed";
+  }
 
   if (
     source === "runtime.lastCompletedRequestAssertions" ||
@@ -2032,7 +2047,7 @@ function createRequestIndexLogItems(runtime: RuntimeContextValue, maxItems?: num
           .filter(Boolean)
           .join(" · "),
         tone:
-          summary.issueCount > 0
+          summary.hasError || summary.issueCount > 0
             ? "danger"
             : summary.hasResultScreen
               ? "success"
@@ -2046,7 +2061,7 @@ function createRequestIndexLogItems(runtime: RuntimeContextValue, maxItems?: num
 
 function getRequestSummarySignal(summary: RequestChainSummary) {
   if (summary.hasError || summary.issueCount > 0) {
-    return "warning" as const;
+    return "danger" as const;
   }
 
   if (summary.hasResultScreen) {
@@ -2063,6 +2078,10 @@ function getRequestSummarySignal(summary: RequestChainSummary) {
 function inferRequestFlowProfile(summary: RequestChainSummary): RequestFlowProfile {
   if (!summary.requestId) {
     return "unknown";
+  }
+
+  if (summary.hasError) {
+    return "failed";
   }
 
   if (summary.source === "form" || summary.hasForm || summary.formCount > 0) {
@@ -2100,6 +2119,8 @@ function getRequestFlowProfileLabel(profile: RequestFlowProfile) {
       return "Approval flow";
     case "form":
       return "Form flow";
+    case "failed":
+      return "Failed flow";
     case "unknown":
     default:
       return "Unknown flow";
@@ -2156,6 +2177,15 @@ function createProfileAssertionItem(summary: RequestChainSummary): DetailItem {
             ? "Form flow detected with structured submission history"
             : "Form flow should preserve form-origin request history",
         tone: summary.source === "form" || summary.formCount > 0 ? "success" : "danger"
+      };
+    case "failed":
+      return {
+        id: "request-profile-assertion",
+        label: "Profile assertion",
+        value: summary.hasError
+          ? "Failed flow detected with a terminal error signal"
+          : "Failed flow should preserve a terminal error signal",
+        tone: summary.hasError ? "success" : "danger"
       };
     case "unknown":
     default:
@@ -2297,13 +2327,60 @@ function createCompletedRequestAssertionItems(summary: RequestChainSummary): Det
   ];
 }
 
-function createRequestMatrixItems(
-  summary: RequestChainSummary,
-  mode: "current" | "completed"
-): DetailItem[] {
+function createFailedRequestAssertionItems(summary: RequestChainSummary): DetailItem[] {
+  const hasFailedRequest = Boolean(summary.requestId);
+
+  return [
+    {
+      id: "failed-request-assert-profile",
+      label: "Inferred profile",
+      value: getRequestFlowProfileLabel(inferRequestFlowProfile(summary)),
+      tone: summary.hasError ? "danger" : "default"
+    },
+    {
+      id: "failed-request-assert-request-id",
+      label: "Failed chain",
+      value: hasFailedRequest ? "A failed request chain is available" : "No failed request chain recorded yet",
+      tone: hasFailedRequest ? "success" : "default"
+    },
+    {
+      id: "failed-request-assert-signal",
+      label: "Failure signal",
+      value: summary.hasError
+        ? "A terminal error screen or error event was recorded for this chain"
+        : hasFailedRequest
+          ? "The failed chain is missing a terminal error signal"
+          : "No failed request chain to inspect",
+      tone: summary.hasError ? "success" : hasFailedRequest ? "danger" : "default"
+    },
+    {
+      id: "failed-request-assert-grouping",
+      label: "Grouped history",
+      value:
+        summary.entryCount > 1
+          ? `${summary.entryCount} grouped history event(s) stayed attached to the failed chain`
+          : hasFailedRequest
+            ? "Only one history event was attached to the failed chain"
+            : "No grouped history to inspect",
+      tone: summary.entryCount > 1 ? "success" : hasFailedRequest ? "warning" : "default"
+    },
+    createProfileAssertionItem(summary),
+    {
+      id: "failed-request-assert-issues",
+      label: "Issues",
+      value:
+        summary.issueCount > 0
+          ? `${summary.issueCount} issue event(s) were recorded on this failed chain`
+          : "No separate error event was recorded beyond the terminal error screen",
+      tone: summary.hasError ? "danger" : "default"
+    }
+  ];
+}
+
+function createRequestMatrixItems(summary: RequestChainSummary, mode: RequestEvaluationMode): DetailItem[] {
   const profile = inferRequestFlowProfile(summary);
-  const expectsCompletion = mode === "completed";
-  const resultOkay = !expectsCompletion || summary.hasResultScreen;
+  const expectsTerminal = mode === "completed" || mode === "failed";
+  const terminalOkay = mode === "failed" ? summary.hasError : summary.hasResultScreen;
 
   const baseItems: DetailItem[] = [
     {
@@ -2324,14 +2401,18 @@ function createRequestMatrixItems(
       tone: summary.entryCount > 1 ? "success" : summary.entryCount === 1 ? "warning" : "default"
     },
     {
-      id: `${mode}-request-matrix-completion`,
-      label: "Completion check",
-      value: expectsCompletion
-        ? resultOkay
-          ? "Result surface recorded for this chain"
-          : "Completed chain is missing a result surface"
+      id: `${mode}-request-matrix-terminal`,
+      label: "Terminal check",
+      value: expectsTerminal
+        ? terminalOkay
+          ? mode === "failed"
+            ? "Terminal error signal recorded for this chain"
+            : "Result surface recorded for this chain"
+          : mode === "failed"
+            ? "Failed chain is missing a terminal error signal"
+            : "Completed chain is missing a result surface"
         : "Completion is optional while the request is still active",
-      tone: expectsCompletion ? (resultOkay ? "success" : "danger") : "default"
+      tone: expectsTerminal ? (terminalOkay ? "success" : "danger") : "default"
     }
   ];
 
@@ -2440,6 +2521,18 @@ function createRequestMatrixItems(
           tone: summary.workspaceCount > 1 ? "success" : "warning"
         }
       ];
+    case "failed":
+      return [
+        ...baseItems,
+        {
+          id: `${mode}-request-matrix-failed-signal`,
+          label: "Failure signal",
+          value: summary.hasError
+            ? "Error screen or error event is attached to the failed chain"
+            : "Failed flow should include an error screen or error event",
+          tone: summary.hasError ? "success" : "danger"
+        }
+      ];
     case "unknown":
     default:
       return [
@@ -2456,10 +2549,14 @@ function createRequestMatrixItems(
 
 function inferRequestVerdict(
   summary: RequestChainSummary,
-  mode: "current" | "completed"
+  mode: RequestEvaluationMode
 ): RequestVerdict {
   if (!summary.requestId) {
     return "idle";
+  }
+
+  if (summary.hasError && mode === "failed") {
+    return "failed";
   }
 
   if (summary.issueCount > 0) {
@@ -2479,6 +2576,8 @@ function inferRequestVerdict(
       return summary.hasCapability && summary.resourceCount > 0 ? "pass" : "needs-review";
     case "form":
       return summary.formCount > 0 || summary.source === "form" ? "pass" : "needs-review";
+    case "failed":
+      return summary.hasError ? "failed" : "needs-review";
     case "unknown":
     default:
       if (mode === "current") {
@@ -2493,6 +2592,8 @@ function getRequestVerdictLabel(verdict: RequestVerdict) {
   switch (verdict) {
     case "pass":
       return "Pass";
+    case "failed":
+      return "Failed";
     case "needs-review":
       return "Needs review";
     case "idle":
@@ -2503,7 +2604,7 @@ function getRequestVerdictLabel(verdict: RequestVerdict) {
 
 function createRequestVerdictItems(
   summary: RequestChainSummary,
-  mode: "current" | "completed"
+  mode: RequestEvaluationMode
 ): DetailItem[] {
   const profile = inferRequestFlowProfile(summary);
   const verdict = inferRequestVerdict(summary, mode);
@@ -2513,13 +2614,18 @@ function createRequestVerdictItems(
       id: `${mode}-request-verdict`,
       label: "Verdict",
       value: getRequestVerdictLabel(verdict),
-      tone: verdict === "pass" ? "success" : verdict === "needs-review" ? "danger" : "default"
+      tone:
+        verdict === "pass"
+          ? "success"
+          : verdict === "failed" || verdict === "needs-review"
+            ? "danger"
+            : "default"
     },
     {
       id: `${mode}-request-verdict-profile`,
       label: "Profile",
       value: getRequestFlowProfileLabel(profile),
-      tone: profile === "unknown" ? "default" : "success"
+      tone: profile === "failed" ? "danger" : profile === "unknown" ? "default" : "success"
     },
     {
       id: `${mode}-request-verdict-summary`,
@@ -2527,10 +2633,17 @@ function createRequestVerdictItems(
       value:
         verdict === "pass"
           ? "Observed request metrics match the inferred flow profile."
+          : verdict === "failed"
+            ? "The request reached a terminal error state; inspect the chain for recovery or retry context."
           : verdict === "needs-review"
             ? "One or more request metrics do not match the inferred flow profile."
             : "No request chain is available for evaluation.",
-      tone: verdict === "pass" ? "success" : verdict === "needs-review" ? "warning" : "default"
+      tone:
+        verdict === "pass"
+          ? "success"
+          : verdict === "failed" || verdict === "needs-review"
+            ? "warning"
+            : "default"
     }
   ];
 }
@@ -3129,12 +3242,29 @@ function createRuntimeDetailsBlock(
         id: `${block.id}-phase`,
         label: "Flow phase",
         value: runtime.flow.phase,
-        tone: runtime.flow.phase === "complete" ? "success" : runtime.flow.phase === "active" ? "warning" : "default"
+        tone:
+          runtime.flow.phase === "complete"
+            ? "success"
+            : runtime.flow.phase === "failed"
+              ? "danger"
+              : runtime.flow.phase === "active"
+                ? "warning"
+                : "default"
       },
       {
         id: `${block.id}-mode`,
         label: "Screen mode",
         value: runtime.screenMode
+      },
+      {
+        id: `${block.id}-lifecycle`,
+        label: "Lifecycle",
+        value: runtime.flow.lifecycle.role,
+        tone: runtime.flow.lifecycle.isTerminal
+          ? "success"
+          : runtime.flow.lifecycle.role === "transient"
+            ? "warning"
+            : "default"
       },
       {
         id: `${block.id}-transition`,
@@ -3150,6 +3280,12 @@ function createRuntimeDetailsBlock(
         id: `${block.id}-last-completed-request-id`,
         label: "Last completed",
         value: runtime.flow.lastCompletedRequestId ?? "None"
+      },
+      {
+        id: `${block.id}-last-failed-request-id`,
+        label: "Last failed",
+        value: runtime.flow.lastFailedRequestId ?? "None",
+        tone: runtime.flow.lastFailedRequestId ? "danger" : "default"
       },
       {
         id: `${block.id}-history-entry-count`,
@@ -3514,7 +3650,13 @@ function createRuntimeDetailsBlock(
       {
         id: `${block.id}-request-signal`,
         label: "Chain signal",
-        value: summary.hasResultScreen ? "Completed with result" : summary.entryCount > 0 ? "Still evolving" : "No request chain",
+      value: summary.hasError
+        ? "Failed with terminal error"
+        : summary.hasResultScreen
+          ? "Completed with result"
+          : summary.entryCount > 0
+            ? "Still evolving"
+            : "No request chain",
         tone: getRequestSummarySignal(summary)
       }
     ];
@@ -3650,10 +3792,13 @@ function createRuntimeDetailsBlock(
   } else if (block.source === "runtime.currentRequestAssertions" || block.source === "runtime.requestAssertions") {
     const chain = getResolvedRequestChain(runtime, block.source, block.requestTarget);
     const summary = chain.summary;
+    const mode = resolveRequestEvaluationMode(runtime, block.source, block.requestTarget, summary);
     items =
-      resolveRequestEvaluationMode(runtime, block.source, block.requestTarget, summary) === "completed"
+      mode === "completed"
         ? createCompletedRequestAssertionItems(summary)
-        : createCurrentRequestAssertionItems(runtime, summary);
+        : mode === "failed"
+          ? createFailedRequestAssertionItems(summary)
+          : createCurrentRequestAssertionItems(runtime, summary);
   } else if (block.source === "runtime.lastCompletedRequestAssertions") {
     const chain = getResolvedRequestChain(runtime, block.source, block.requestTarget);
     const summary = chain.summary;
@@ -4229,6 +4374,8 @@ function createRuntimeStageFacts(runtime: RuntimeContextValue) {
       tone:
         runtime.flow.phase === "complete"
           ? "success"
+          : runtime.flow.phase === "failed"
+            ? "danger"
           : runtime.flow.phase === "active" || runtime.flow.phase === "pending"
             ? "warning"
             : "default"
@@ -4524,7 +4671,8 @@ function createRendererTransitionSnapshot(
     mode: runtime.screenMode,
     requestId: runtime.flow.requestId,
     flowPhase: runtime.flow.phase,
-    flowTransition: snapshot.screen?.flow?.transition,
+    flowTransition: runtime.flow.transition,
+    lifecycleRole: runtime.flow.lifecycle.role,
     interactionReason: runtime.interaction.reason,
     interactionLocked: createInteractionLockSnapshot(runtime)
   };
@@ -4755,24 +4903,34 @@ function RequestInspectorModal({
   const resolvedBlocks = resolveRuntimeBlocks(buildRequestInspectorBlocks(normalizedTarget), runtime);
   const chain = getResolvedRequestChain(runtime, "runtime.request", normalizedTarget);
   const [targetInput, setTargetInput] = useState(
-    normalizedTarget === "current" || normalizedTarget === "lastCompleted" ? "" : normalizedTarget
+    normalizedTarget === "current" || normalizedTarget === "lastCompleted" || normalizedTarget === "lastFailed"
+      ? ""
+      : normalizedTarget
   );
   const title =
     normalizedTarget === "current"
       ? "Current request inspector"
       : normalizedTarget === "lastCompleted"
         ? "Last completed request inspector"
+        : normalizedTarget === "lastFailed"
+          ? "Last failed request inspector"
         : `Request ${chain.requestId ?? normalizedTarget}`;
   const subtitle =
     normalizedTarget === "current"
       ? "Renderer-level inspector driven by the active runtime request chain."
       : normalizedTarget === "lastCompleted"
         ? "Renderer-level inspector driven by the most recent completed request chain."
+        : normalizedTarget === "lastFailed"
+          ? "Renderer-level inspector driven by the most recent failed request chain."
         : "Renderer-level inspector driven by an explicit request target.";
   const explicitTarget = targetInput.trim();
 
   useEffect(() => {
-    setTargetInput(normalizedTarget === "current" || normalizedTarget === "lastCompleted" ? "" : normalizedTarget);
+    setTargetInput(
+      normalizedTarget === "current" || normalizedTarget === "lastCompleted" || normalizedTarget === "lastFailed"
+        ? ""
+        : normalizedTarget
+    );
   }, [normalizedTarget, visible]);
 
   function openExplicitTarget() {
@@ -5121,7 +5279,9 @@ const AgentRuntimeContent = forwardRef<AgentRuntimeViewHandle, AgentRuntimeConte
     const flowChanged =
       previousSnapshot.requestId !== transitionSnapshot.requestId ||
       previousSnapshot.flowPhase !== transitionSnapshot.flowPhase ||
-      previousSnapshot.flowTransition !== transitionSnapshot.flowTransition;
+      previousSnapshot.flowTransition !== transitionSnapshot.flowTransition ||
+      previousSnapshot.lifecycleRole !== transitionSnapshot.lifecycleRole;
+    const lifecycleChanged = previousSnapshot.lifecycleRole !== transitionSnapshot.lifecycleRole;
     const interactionLockChanged = hasInteractionLockChanged(
       previousSnapshot.interactionLocked,
       transitionSnapshot.interactionLocked
@@ -5137,6 +5297,10 @@ const AgentRuntimeContent = forwardRef<AgentRuntimeViewHandle, AgentRuntimeConte
 
     if (flowChanged) {
       changed.push("flow");
+    }
+
+    if (lifecycleChanged) {
+      changed.push("lifecycle");
     }
 
     if (interactionLockChanged) {
@@ -5158,14 +5322,16 @@ const AgentRuntimeContent = forwardRef<AgentRuntimeViewHandle, AgentRuntimeConte
           mode: previousSnapshot.mode,
           requestId: previousSnapshot.requestId,
           flowPhase: previousSnapshot.flowPhase,
-          flowTransition: previousSnapshot.flowTransition
+          flowTransition: previousSnapshot.flowTransition,
+          lifecycleRole: previousSnapshot.lifecycleRole
         },
         current: {
           screenId: transitionSnapshot.screenId,
           mode: transitionSnapshot.mode,
           requestId: transitionSnapshot.requestId,
           flowPhase: transitionSnapshot.flowPhase,
-          flowTransition: transitionSnapshot.flowTransition
+          flowTransition: transitionSnapshot.flowTransition,
+          lifecycleRole: transitionSnapshot.lifecycleRole
         }
       });
     }

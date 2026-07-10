@@ -12,6 +12,7 @@
     "build": "npm run build --workspaces --if-present",
     "typecheck": "tsc -p tsconfig.json --noEmit",
     "lint": "tsc -p tsconfig.json --noEmit",
+    "smoke:packages": "npm run build && node scripts/smoke-packages.mjs",
     "changeset": "changeset",
     "version-packages": "changeset version",
     "release": "changeset publish"

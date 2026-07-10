@@ -1,10 +1,10 @@
 {
   "name": "@selfme/unstable-ui-core-blocks",
-  "version": "0.1.0-alpha.4",
+  "version": "0.1.0-alpha.5",
   "description": "Built-in block renderer set for the unstable-ui framework.",
   "license": "MIT",
   "sideEffects": false,
-  "main": "./dist/index.cjs",
+  "main": "./dist/index.js",
   "module": "./dist/index.mjs",
   "types": "./dist/index.d.ts",
   "react-native": "./src/index.tsx",
@@ -13,7 +13,7 @@
       "types": "./dist/index.d.ts",
       "react-native": "./src/index.tsx",
       "import": "./dist/index.mjs",
-      "require": "./dist/index.cjs",
+      "require": "./dist/index.js",
       "default": "./dist/index.mjs"
     }
   },
@@ -34,6 +34,6 @@
     "react-native": ">=0.76.0"
   },
   "dependencies": {
-    "@selfme/unstable-ui-protocol": "0.1.0-alpha.4"
+    "@selfme/unstable-ui-protocol": "0.1.0-alpha.5"
   }
 }

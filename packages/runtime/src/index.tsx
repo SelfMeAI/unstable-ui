@@ -9,8 +9,10 @@ import {
   type ClientEvent,
   type HarnessEvent,
   type NavigationChange,
+  resolveScreenLifecycle,
   type ScreenFlow,
   type ScreenInteraction,
+  type ScreenLifecycle,
   type ScreenMode,
   type ScreenSchema,
   type TimelineItem
@@ -67,6 +69,8 @@ export interface RuntimeSnapshot {
   sessionId?: string;
   status: RuntimeContextValue["status"];
   screen?: ScreenSchema;
+  lastCompletedRequestId?: string;
+  lastFailedRequestId?: string;
   artifacts: ArtifactRef[];
   capabilityRequests: CapabilityRequest[];
   navigation?: RuntimeNavigationState;
@@ -88,11 +92,13 @@ export interface AgentRuntimeOptions {
 export interface RuntimeRequestFlowState {
   requestId?: string;
   source?: RuntimeRequestSource;
-  phase: "idle" | "pending" | "active" | "complete";
+  phase: "idle" | "pending" | "active" | "complete" | "failed";
   screenMode: ScreenMode;
+  lifecycle: ScreenLifecycle;
   transition?: ScreenFlow["transition"];
   screenId?: string;
   lastCompletedRequestId?: string;
+  lastFailedRequestId?: string;
   historyEntryCount: number;
   workspaceEventCount: number;
   patchEventCount: number;
@@ -184,7 +190,7 @@ export interface RuntimeRequestGroup {
 
 type RuntimeRequestSource = "voice" | "input" | "action" | "form";
 
-export type RuntimeRequestTarget = "current" | "lastCompleted" | string;
+export type RuntimeRequestTarget = "current" | "lastCompleted" | "lastFailed" | string;
 
 export interface RuntimeResolvedRequestChain {
   target: RuntimeRequestTarget;
@@ -237,6 +243,7 @@ interface RuntimeMachineContext {
   activeRequestId?: string;
   activeRequestSource?: RuntimeRequestSource;
   lastCompletedRequestId?: string;
+  lastFailedRequestId?: string;
   artifacts: ArtifactRef[];
   capabilityRequests: CapabilityRequest[];
   navigation: RuntimeNavigationState;
@@ -444,6 +451,14 @@ function inferScreenFlow(screen: ScreenSchema | undefined, context: RuntimeMachi
             transition: "replace"
           }
         : undefined;
+    case "error":
+      return requestId
+        ? {
+            requestId,
+            state: "failed",
+            transition: "replace"
+          }
+        : undefined;
     default:
       return undefined;
   }
@@ -470,13 +485,26 @@ function deriveRuntimeFlowState(
     | "activeRequestId"
     | "activeRequestSource"
     | "lastCompletedRequestId"
+    | "lastFailedRequestId"
     | "error"
     | "history"
   >,
   capabilityRequests: CapabilityRequest[] = []
 ): RuntimeRequestFlowState {
   const screenMode = deriveScreenMode(context.screen, context.error, capabilityRequests);
-  const screenFlow = inferScreenFlow(context.screen, context as RuntimeMachineContext);
+  const screenFlow =
+    inferScreenFlow(context.screen, context as RuntimeMachineContext) ??
+    (screenMode === "error" && context.lastFailedRequestId
+      ? {
+          requestId: context.lastFailedRequestId,
+          state: "failed" as const,
+          transition: "replace" as const
+        }
+      : undefined);
+  const lifecycle = resolveScreenLifecycle({
+    mode: screenMode,
+    flow: screenFlow ?? context.screen?.flow
+  });
   const currentRequestId = screenFlow?.requestId ?? context.pendingRequestId ?? context.activeRequestId;
   const requestSummary = summarizeRuntimeRequestHistory(context.history, currentRequestId);
 
@@ -484,11 +512,14 @@ function deriveRuntimeFlowState(
     return {
       requestId: screenFlow.requestId,
       source: context.activeRequestSource,
-      phase: screenFlow.state === "complete" ? "complete" : "active",
+      phase:
+        screenFlow.state === "failed" ? "failed" : screenFlow.state === "complete" ? "complete" : "active",
       screenMode,
+      lifecycle,
       transition: screenFlow.transition,
       screenId: context.screen?.id,
       lastCompletedRequestId: context.lastCompletedRequestId,
+      lastFailedRequestId: context.lastFailedRequestId,
       historyEntryCount: requestSummary.historyEntryCount,
       workspaceEventCount: requestSummary.workspaceEventCount,
       patchEventCount: requestSummary.patchEventCount,
@@ -506,9 +537,11 @@ function deriveRuntimeFlowState(
           ? "active"
           : "pending",
       screenMode,
+      lifecycle,
       transition: context.screen?.flow?.transition,
       screenId: context.screen?.id,
       lastCompletedRequestId: context.lastCompletedRequestId,
+      lastFailedRequestId: context.lastFailedRequestId,
       historyEntryCount: requestSummary.historyEntryCount,
       workspaceEventCount: requestSummary.workspaceEventCount,
       patchEventCount: requestSummary.patchEventCount,
@@ -520,9 +553,11 @@ function deriveRuntimeFlowState(
   return {
     phase: "idle",
     screenMode,
+    lifecycle,
     transition: context.screen?.flow?.transition,
     screenId: context.screen?.id,
     lastCompletedRequestId: context.lastCompletedRequestId,
+    lastFailedRequestId: context.lastFailedRequestId,
     historyEntryCount: 0,
     workspaceEventCount: 0,
     patchEventCount: 0,
@@ -557,6 +592,16 @@ function deriveRuntimeInteraction(
       actions: "locked",
       forms: "locked",
       reason: nextInteraction.reason ?? "Waiting for a device capability decision."
+    };
+  }
+
+  if (flow?.phase === "pending") {
+    return {
+      ...nextInteraction,
+      input: "locked",
+      actions: "locked",
+      forms: "locked",
+      reason: nextInteraction.reason ?? "Waiting for the harness to begin the current request."
     };
   }
 
@@ -609,6 +654,8 @@ function buildRuntimeSnapshot(context: RuntimeMachineContext): RuntimeSnapshot {
     sessionId: context.sessionId,
     status: context.status,
     screen: context.screen,
+    lastCompletedRequestId: context.lastCompletedRequestId,
+    lastFailedRequestId: context.lastFailedRequestId,
     artifacts: context.artifacts,
     capabilityRequests: context.capabilityRequests,
     navigation: context.navigation,
@@ -718,7 +765,7 @@ export function summarizeRuntimeRequestEntries(
     hasCapability: entries.some((entry) => entry.kind === "capability"),
     hasArtifact: entries.some((entry) => entry.kind === "artifact"),
     hasForm: entries.some((entry) => entry.kind === "form"),
-    hasError: entries.some((entry) => entry.kind === "error")
+    hasError: entries.some((entry) => entry.kind === "error") || screenModes.includes("error")
   };
 }
 
@@ -728,6 +775,10 @@ export function getRuntimeCurrentRequestEntries(runtime: Pick<RuntimeContextValu
 
 export function getRuntimeLastCompletedRequestEntries(runtime: Pick<RuntimeContextValue, "flow" | "history">) {
   return getRuntimeRequestEntries(runtime.history, runtime.flow.lastCompletedRequestId);
+}
+
+export function getRuntimeLastFailedRequestEntries(runtime: Pick<RuntimeContextValue, "flow" | "history">) {
+  return getRuntimeRequestEntries(runtime.history, runtime.flow.lastFailedRequestId);
 }
 
 export function resolveRuntimeRequestId(
@@ -740,6 +791,10 @@ export function resolveRuntimeRequestId(
 
   if (target === "lastCompleted") {
     return runtime.flow.lastCompletedRequestId;
+  }
+
+  if (target === "lastFailed") {
+    return runtime.flow.lastFailedRequestId;
   }
 
   return target;
@@ -1284,11 +1339,24 @@ function reduceRequestTrackingFromScreen(context: RuntimeMachineContext, screen?
   const flow = inferScreenFlow(screen, context);
 
   if (!flow) {
+    const lifecycle = resolveScreenLifecycle(screen);
+
+    if (lifecycle.role === "root") {
+      return {
+        pendingRequestId: undefined,
+        activeRequestId: undefined,
+        activeRequestSource: undefined,
+        lastCompletedRequestId: context.lastCompletedRequestId,
+        lastFailedRequestId: context.lastFailedRequestId
+      };
+    }
+
     return {
       pendingRequestId: context.pendingRequestId,
       activeRequestId: context.activeRequestId,
       activeRequestSource: context.activeRequestSource,
-      lastCompletedRequestId: context.lastCompletedRequestId
+      lastCompletedRequestId: context.lastCompletedRequestId,
+      lastFailedRequestId: context.lastFailedRequestId
     };
   }
 
@@ -1297,7 +1365,18 @@ function reduceRequestTrackingFromScreen(context: RuntimeMachineContext, screen?
       pendingRequestId: undefined,
       activeRequestId: undefined,
       activeRequestSource: undefined,
-      lastCompletedRequestId: flow.requestId ?? context.activeRequestId ?? context.pendingRequestId ?? context.lastCompletedRequestId
+      lastCompletedRequestId: flow.requestId ?? context.activeRequestId ?? context.pendingRequestId ?? context.lastCompletedRequestId,
+      lastFailedRequestId: context.lastFailedRequestId
+    };
+  }
+
+  if (flow.state === "failed") {
+    return {
+      pendingRequestId: undefined,
+      activeRequestId: undefined,
+      activeRequestSource: undefined,
+      lastCompletedRequestId: context.lastCompletedRequestId,
+      lastFailedRequestId: flow.requestId ?? context.activeRequestId ?? context.pendingRequestId ?? context.lastFailedRequestId
     };
   }
 
@@ -1305,7 +1384,8 @@ function reduceRequestTrackingFromScreen(context: RuntimeMachineContext, screen?
     pendingRequestId: undefined,
     activeRequestId: flow.requestId ?? context.pendingRequestId ?? context.activeRequestId,
     activeRequestSource: context.activeRequestSource,
-    lastCompletedRequestId: context.lastCompletedRequestId
+    lastCompletedRequestId: context.lastCompletedRequestId,
+    lastFailedRequestId: context.lastFailedRequestId
   };
 }
 
@@ -1379,6 +1459,10 @@ const runtimeMachine = setup({
       activeRequestId: ({ context, event }) => (event.type === "runtime.error" ? undefined : context.activeRequestId),
       activeRequestSource: ({ context, event }) =>
         event.type === "runtime.error" ? undefined : context.activeRequestSource,
+      lastFailedRequestId: ({ context, event }) =>
+        event.type === "runtime.error"
+          ? context.pendingRequestId ?? context.activeRequestId ?? context.lastFailedRequestId
+          : context.lastFailedRequestId,
       history: ({ context, event }) =>
         event.type === "runtime.error"
           ? appendRuntimeHistory(
@@ -1465,6 +1549,7 @@ const runtimeMachine = setup({
             pendingRequestId: undefined,
             activeRequestId: undefined,
             activeRequestSource: undefined,
+            lastFailedRequestId: undefined,
             navigation: createDefaultRuntimeNavigationState(),
             history: nextHistory,
             eventLog: nextEventLog
@@ -1526,6 +1611,8 @@ const runtimeMachine = setup({
             pendingRequestId: undefined,
             activeRequestId: undefined,
             activeRequestSource: undefined,
+            lastFailedRequestId:
+              context.pendingRequestId ?? context.activeRequestId ?? context.lastFailedRequestId,
             history: nextHistory,
             eventLog: nextEventLog
           };

@@ -217,6 +217,7 @@
             <li>renderer 现在还开始导出 <code class="inline">createHostIntegration(...)</code>，把 preview handler、capability preset 和 host bridge 组合成一个统一宿主接入对象。</li>
             <li>renderer 已开始统一承担无 screen、connecting、error 和 in-flight 阶段态呈现，不再完全依赖 harness 自己补过渡说明。</li>
             <li>screen lifecycle、runtime flow controller 和 renderer transition hooks 已进入主干。</li>
+            <li>screen lifecycle 已收成协议层派生语义：由 mode / flow 统一得出 root、transient、intermediate、final，避免再维护一组容易失真的可变状态。</li>
             <li>demo 已经开始消费 transition hooks，过渡效果从框架事件驱动，而不是再靠页面内零散动画拼接。</li>
             <li>远端 harness 示例已经和本地 demo 对齐到明确的 request flow 页面阶段。</li>
             <li>harness-sdk 已经开始导出正式的 screen flow helper，减少接入方自己拼 mode / flow / interaction。</li>

@@ -164,7 +164,21 @@
             <li><code class="inline">error</code>：错误或恢复页。</li>
           </ul>
           <p>
-            <code class="inline">screen.flow</code> 里现在至少要能表达 requestId、ongoing / complete 和 replace / root。这是 runtime 管输入锁、历史和后续动画系统的共同基础。
+            <code class="inline">screen.flow</code> 里现在至少要能表达 requestId、ongoing / complete / failed 和 replace / root。这是 runtime 管输入锁、历史和后续动画系统的共同基础。
+          </p>
+          <p>
+            <code class="inline">resolveScreenLifecycle(screen)</code> 会从这些字段统一推导出
+            <code class="inline">root</code>、<code class="inline">transient</code>、
+            <code class="inline">intermediate</code> 和 <code class="inline">final</code> 四类页面角色。
+            这不是新的可变协议字段，而是 runtime 和 renderer 共享的页面意图判断。
+          </p>
+          <p>
+            任一会产生请求的 client event 进入 runtime 后，会立刻进入 <code class="inline">pending</code> 并锁住输入、action 和 form。
+            锁会持续到 harness 推进或完成 flow、进入 capability 决策，或者返回 error，避免首个 processing 页面到达前出现重复提交窗口。
+          </p>
+          <p>
+            如果 harness 发来的是未关联 request 的 stable <code class="inline">screen.updated</code>，runtime 会把它当作回到根页面并解除 pending。
+            但建议 harness 明确发送 <code class="inline">flow.transition = root</code>，这样宿主和过渡系统能直接知道这是一次顶层重置。
           </p>
           <p>
             另外，当前 demo 已经开始真实消费 <code class="inline">screen.patched</code>。同一个 request 内如果只是局部推进工作区，不应该总是整页替换，而应尽量用 patch 表达增量变化。
@@ -211,7 +225,7 @@
           </div>
           <div class="note">
             通用 request 源可以额外带一个 <code class="inline">requestTarget</code>。保留值只有
-            <code class="inline">current</code> 和 <code class="inline">lastCompleted</code>，
+            <code class="inline">current</code>、<code class="inline">lastCompleted</code> 和 <code class="inline">lastFailed</code>，
             其他非空字符串都按显式 <code class="inline">requestId</code> 处理。
           </div>
           <div class="note">
@@ -486,11 +500,11 @@
           <h2>10. 当前判断</h2>
           <ul>
             <li>第一版协议坚持“事件 + 受约束 block schema”，不回退到任意组件代码。</li>
-            <li>当前已经有最小 artifact / capability / form 闭环，下一步重点先转向 lifecycle 和 flow controller。</li>
+            <li>当前已经有最小 artifact / capability / form 闭环，页面 lifecycle 已开始由 mode / flow 统一派生，后续重点是继续收紧 flow controller。</li>
             <li>现在已经支持最小 screen patch，但仍然保持受约束的小操作集合，不开放任意 UI diff。</li>
             <li>现在已经把 <code class="inline">screen.flow.requestId</code> 作为 staged page flow、history 和 transition hooks 的主关联键。</li>
             <li><code class="inline">interaction.history</code> 现在已经是会真正影响 renderer 行为的控制位。</li>
-            <li>当前已经具备基础 screen mode / interaction 语义，但还没有完成正式的页面流转协议。</li>
+            <li>当前已经具备基础 screen mode / interaction 语义；root、transient、intermediate、final 会从 mode / flow 派生，不额外增加易失真的 lifecycle 字段。</li>
             <li>如果后续出现更复杂布局需求，优先扩展 block 和 layout schema，而不是引入可执行 UI。</li>
           </ul>
         </section>

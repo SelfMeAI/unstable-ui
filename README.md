@@ -82,6 +82,7 @@ export function AssistantScreen() {
 
 runtimeRef.current?.openRequestInspector("current");
 runtimeRef.current?.openRequestInspector("lastCompleted");
+runtimeRef.current?.openRequestInspector("lastFailed");
 runtimeRef.current?.openRequestInspector("voice-123");
 runtimeRef.current?.openHistory();
 await runtimeRef.current?.clearPersistence();
@@ -706,7 +707,10 @@ export function AssistantScreen() {
 npm install
 npm run typecheck
 npm run build
+npm run smoke:packages
 ```
+
+`smoke:packages` rebuilds the workspaces and verifies the CommonJS and ESM package entries, failed-flow helpers, and `lastFailed` request lookup.
 
 Run the Expo demo:
 

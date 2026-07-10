@@ -127,6 +127,15 @@ export function createCompletedScreenFlow(requestId?: string, parentRequestId?: 
   };
 }
 
+export function createFailedScreenFlow(requestId?: string, parentRequestId?: string): ScreenFlow {
+  return {
+    requestId,
+    parentRequestId,
+    transition: "replace",
+    state: "failed"
+  };
+}
+
 export function applyScreenFlow(screen: ScreenSchema, flow: ScreenFlow): ScreenSchema {
   return {
     ...screen,
@@ -191,7 +200,7 @@ export function createApprovalScreen(
 export function createErrorScreen(
   screen: Omit<ScreenSchema, "mode" | "interaction" | "flow">,
   interaction: Partial<ScreenInteraction> = {},
-  flow: ScreenFlow = createCompletedScreenFlow()
+  flow: ScreenFlow = createFailedScreenFlow()
 ): ScreenSchema {
   return withScreenState(screen, "error", interaction, flow);
 }

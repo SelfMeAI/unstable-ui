@@ -75,7 +75,25 @@
         </section>
 
         <section class="section">
-          <h2>5. 页面流 helper</h2>
+          <h2>5. 派生 lifecycle 角色</h2>
+          <p>
+            协议现在提供 <code class="inline">resolveScreenLifecycle(screen)</code>。它不新增一组可变字段，
+            而是统一从已有的 <code class="inline">mode</code> 和 <code class="inline">flow</code> 推导页面意图，
+            runtime 和 renderer 使用的是同一套判断。
+          </p>
+          <ul>
+            <li><code class="inline">root</code>：不属于活跃请求的顶层稳定页面。</li>
+            <li><code class="inline">transient</code>：harness 正在准备下一页时的 processing 页面。</li>
+            <li><code class="inline">intermediate</code>：任务执行中或等待审批的中间工作页。</li>
+            <li><code class="inline">final</code>：已完成的结果页或错误页。</li>
+          </ul>
+          <div class="note">
+            后续动画只需要消费 renderer transition hook 里的 lifecycleRole，不应该再从任意 screen id 或 block 变化里猜测页面意图。
+          </div>
+        </section>
+
+        <section class="section">
+          <h2>6. 页面流 helper</h2>
           <p>
             现在 <code class="inline">harness-sdk</code> 已经导出一组 screen helper，用来统一构建带
             <code class="inline">mode</code>、<code class="inline">flow</code> 和
@@ -86,9 +104,11 @@
             <li><code class="inline">createProcessingScreen</code></li>
             <li><code class="inline">createTaskScreen</code></li>
             <li><code class="inline">createResultScreen</code></li>
+            <li><code class="inline">createErrorScreen</code></li>
             <li><code class="inline">createRootScreenFlow</code></li>
             <li><code class="inline">createOngoingScreenFlow</code></li>
             <li><code class="inline">createCompletedScreenFlow</code></li>
+            <li><code class="inline">createFailedScreenFlow</code></li>
             <li><code class="inline">applyScreenFlow</code></li>
           </ul>
           <div class="note">
@@ -97,7 +117,7 @@
         </section>
 
         <section class="section">
-          <h2>6. 验证面</h2>
+          <h2>7. 验证面</h2>
           <p>
             runtime 现在已经开始内建面向接入调试的验证视图，不需要 harness 额外发一套“验收事件”。
           </p>
@@ -120,8 +140,13 @@
             接入方的重点不再是自己造一套 debug UI，而是先把 requestId、screen.mode、screen.flow、screen.patched 这些协议语义发准确。
           </div>
           <div class="note">
+            终态 error screen 或 error event 会被识别为 failed flow，verdict 显示为 <code class="inline">Failed</code>。
+            这和 <code class="inline">Needs review</code> 不一样：前者说明任务确实失败，后者说明协议链路和预期生命周期不一致。
+          </div>
+          <div class="note">
             另外，这套 request 查询与汇总逻辑现在已经从 <code class="inline">@selfme/unstable-ui-runtime</code> 正式导出成 helper API，
             自定义 renderer 或宿主调试面板可以直接复用 request catalog、request target resolver、resource query 和 summary 逻辑，不用再在各自工程里复制 renderer 内部实现。
+            开启 persistence 时，snapshot 也会保留最近完成和最近失败请求的 id，恢复后可以继续直接使用对应 inspector target。
           </div>
           <div class="note">
             默认 renderer 现在还额外暴露了一个宿主级 imperative handle。
@@ -163,7 +188,7 @@
             <li>默认 renderer 已经内建 <code class="inline">open-url</code> 和 <code class="inline">share</code> 两类系统桥接，不必一开始就自定义 handler。</li>
             <li>默认 renderer 也已经内建 artifact 的 <code class="inline">share</code> 和 <code class="inline">download</code> 行为，资源块不再只停留在 preview / open。</li>
             <li>history 现在已经开始绑定 requestId，同一次输入触发出来的 processing / task / result 页面能被串起来回看。</li>
-            <li>runtime 已经能派生 currentRequest、lastCompletedRequest 和请求级验证指标，调试重点正在从“看零散 event log”转向“看整条 request 链”。</li>
+            <li>runtime 已经能派生 currentRequest、lastCompletedRequest 和请求级验证指标；最近失败请求也可以通过 <code class="inline">lastFailed</code> target 直接打开 inspector，调试重点正在从“看零散 event log”转向“看整条 request 链”。</li>
             <li><code class="inline">interaction.history</code> 现在是正式生效的 renderer 控制位，不再只是协议里的摆设字段。</li>
             <li>如果宿主只想接管系统打开、分享或默认 capability resolution，而不想重写更高层 handler，现在可以走 <code class="inline">hostBridge</code>。</li>
             <li>如果宿主只想补 <code class="inline">openUrl</code>、<code class="inline">share</code> 或简单 capability payload 覆盖，可直接用 <code class="inline">createHostBridge(...)</code>，不用手写完整 <code class="inline">resolveCapability()</code>。</li>

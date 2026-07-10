@@ -277,7 +277,7 @@ type Screen = {
   flow?: {
     requestId?: string;
     parentRequestId?: string;
-    state?: "ongoing" | "complete";
+    state?: "ongoing" | "complete" | "failed";
     transition?: "replace" | "root";
   };
   interaction?: {
@@ -297,8 +297,22 @@ Lifecycle guidance:
 - Use `mode = "processing"` for request entry shells.
 - Use `mode = "task"` for intermediate task workspaces.
 - Use `mode = "result"` for completed result surfaces.
+- Use `mode = "error"` with `flow.state = "failed"` for terminal request failures.
 - Reuse the same `flow.requestId` across all staged pages that belong to one request.
 - Use `flow.transition = "root"` only for top-level resets such as returning home.
+
+`resolveScreenLifecycle(screen)` derives one shared page role from this metadata without adding another mutable protocol field:
+
+- `root` for a top-level stable surface
+- `transient` for a processing surface
+- `intermediate` for an active task or approval workspace
+- `final` for a completed result or error surface
+
+Runtime flow inspection and renderer transition hooks expose this resolved role so hosts can coordinate UI transitions from explicit page intent instead of inferring it from screen ids or block changes.
+
+When a request-producing client event enters runtime, its request starts in `pending` immediately. Input, actions, and forms are locked until the harness advances the request, completes it, requests a capability decision, or emits an error. This closes the gap before the first processing screen arrives.
+
+An unscoped stable `screen.updated` is treated as a root reset and releases any pending request. Harnesses should still send `flow.transition = "root"` explicitly when they reset to a top-level page so host transition systems can observe the intent directly.
 
 The current runtime baseline uses `flow.requestId` for more than animation hooks: it also powers request-aware history grouping, runtime inspection details, and staged page-flow debugging.
 
@@ -391,7 +405,7 @@ The bridge-derived details sources are intended to keep artifact and capability 
 - `runtime.bridgeVerdict`
   A top-level verdict summarizing whether bridge-facing artifact and capability signals are internally consistent.
 
-For the generic request sources above, `details`, `timeline`, and `log` blocks may also provide `requestTarget`. The reserved values are `current` and `lastCompleted`; any other non-empty string is treated as an explicit `requestId`.
+For the generic request sources above, `details`, `timeline`, and `log` blocks may also provide `requestTarget`. The reserved values are `current`, `lastCompleted`, and `lastFailed`; any other non-empty string is treated as an explicit `requestId`.
 
 `actions` blocks may also be runtime-derived. The current built-in source is `runtime.requestIndexActions`, which turns the request catalog into drill-down actions that can open a request inspector or other host-defined request view.
 

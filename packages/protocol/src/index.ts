@@ -291,7 +291,7 @@ export const splitBlockSchema = z.object({
 
 export const screenModeSchema = z.enum(["stable", "processing", "task", "result", "approval", "error"]);
 
-export const screenFlowStateSchema = z.enum(["ongoing", "complete"]);
+export const screenFlowStateSchema = z.enum(["ongoing", "complete", "failed"]);
 
 export const screenFlowTransitionSchema = z.enum(["replace", "root"]);
 
@@ -468,7 +468,7 @@ export type DetailItem = z.infer<typeof detailItemSchema>;
 export type NavigationChange = z.infer<typeof navigationChangeSchema>;
 export type NavigationSurface = z.infer<typeof navigationSurfaceSchema>;
 export type NavigationVisibility = z.infer<typeof navigationVisibilitySchema>;
-export type RequestTarget = "current" | "lastCompleted" | string;
+export type RequestTarget = "current" | "lastCompleted" | "lastFailed" | string;
 export type FormField = z.infer<typeof formFieldSchema>;
 export type FormBlock = z.infer<typeof formBlockSchema>;
 export type DetailsBlock = z.infer<typeof detailsBlockSchema>;
@@ -481,6 +481,16 @@ export type ScreenMode = z.infer<typeof screenModeSchema>;
 export type ScreenFlow = z.infer<typeof screenFlowSchema>;
 export type ScreenFlowState = z.infer<typeof screenFlowStateSchema>;
 export type ScreenFlowTransition = z.infer<typeof screenFlowTransitionSchema>;
+export type ScreenLifecycleRole = "root" | "transient" | "intermediate" | "final";
+export interface ScreenLifecycle {
+  role: ScreenLifecycleRole;
+  mode: ScreenMode;
+  state: ScreenFlowState;
+  transition: ScreenFlowTransition;
+  requestId?: string;
+  isRequestScoped: boolean;
+  isTerminal: boolean;
+}
 export type ScreenInteraction = z.infer<typeof screenInteractionSchema>;
 export type TimelineItem = z.infer<typeof timelineItemSchema>;
 export type TimelineBlock = z.infer<typeof timelineBlockSchema>;
@@ -496,6 +506,46 @@ export function parseHarnessEvent(input: unknown): HarnessEvent {
 
 export function parseClientEvent(input: unknown): ClientEvent {
   return clientEventSchema.parse(input);
+}
+
+/**
+ * Resolves the screen's lifecycle role without adding another mutable protocol field.
+ * Harnesses keep declaring mode and flow; every consumer derives the same page intent.
+ */
+export function resolveScreenLifecycle(
+  screen?: Pick<ScreenSchema, "mode" | "flow">
+): ScreenLifecycle {
+  const mode = screen?.mode ?? "stable";
+  const flow = screen?.flow;
+  const state = flow?.state ?? "complete";
+  const transition = flow?.transition ?? "root";
+  let role: ScreenLifecycleRole;
+
+  if (mode === "processing") {
+    role = "transient";
+  } else if (mode === "task" || mode === "approval") {
+    role = "intermediate";
+  } else if (
+    mode === "result" ||
+    mode === "error" ||
+    (flow?.requestId && (state === "complete" || state === "failed"))
+  ) {
+    role = "final";
+  } else if (flow?.requestId || state === "ongoing") {
+    role = "intermediate";
+  } else {
+    role = "root";
+  }
+
+  return {
+    role,
+    mode,
+    state,
+    transition,
+    requestId: flow?.requestId,
+    isRequestScoped: Boolean(flow?.requestId),
+    isTerminal: role === "final"
+  };
 }
 
 export function applyScreenPatch(

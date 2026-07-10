@@ -1,17 +1,17 @@
 {
   "name": "@selfme/unstable-ui-harness-sdk",
-  "version": "0.1.0-alpha.4",
+  "version": "0.1.0-alpha.5",
   "description": "Harness adapter SDK for the unstable-ui framework.",
   "license": "MIT",
   "sideEffects": false,
-  "main": "./dist/index.cjs",
+  "main": "./dist/index.js",
   "module": "./dist/index.mjs",
   "types": "./dist/index.d.ts",
   "exports": {
     ".": {
       "types": "./dist/index.d.ts",
       "import": "./dist/index.mjs",
-      "require": "./dist/index.cjs",
+      "require": "./dist/index.js",
       "default": "./dist/index.mjs"
     }
   },
@@ -27,6 +27,6 @@
     "access": "public"
   },
   "dependencies": {
-    "@selfme/unstable-ui-protocol": "0.1.0-alpha.4"
+    "@selfme/unstable-ui-protocol": "0.1.0-alpha.5"
   }
 }

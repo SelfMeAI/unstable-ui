@@ -58,8 +58,8 @@
             现在不继续纠缠动画，也不继续做零散视觉实验。下一步直接进入页面流转主干建设，把“输入后经历什么页面、什么时候锁输入、什么时候回到可交互状态”这套机制定死。
           </p>
           <ol>
-            <li>先补 <strong>screen lifecycle</strong> 语义，明确 idle、processing、task、result、approval、error 这些页面角色。</li>
-            <li>再补 <strong>runtime flow controller</strong>，明确当前 screen 是替换、临时过渡、任务中间态还是最终结果态。</li>
+            <li><strong>screen lifecycle</strong> 语义已补齐：由 mode / flow 派生 root、transient、intermediate、final，不增加另一套可变状态。</li>
+            <li>继续收紧 <strong>runtime flow controller</strong>：提交即进入 pending 并锁输入，区分 completed / failed 终态，明确当前 screen 是替换、临时过渡、任务中间态还是最终结果态。</li>
             <li>在 renderer 层固定 transition hooks，让动画系统只消费过渡事件，不再反向侵入 runtime 语义。</li>
             <li>把 demo harness 收敛成几条标准流程，而不是继续堆随机页面。</li>
             <li>等页面流、输入锁和历史记录都稳定后，再重新设计动画系统。</li>
